@@ -1022,6 +1022,14 @@ export interface NotificationDelivery {
   severity: string;
 }
 
+// ---- Global persona ----
+export interface Persona {
+  id: string;
+  name: string;
+  prompt: string;
+  is_active: boolean;
+}
+
 // ---- LLM config ----
 export interface LLMProfile {
   id: string;

@@ -44,9 +44,8 @@ func TestNormalizeAccepts(t *testing.T) {
 }
 
 func TestNormalizeCopiesAndResetsState(t *testing.T) {
-	id := int64(7)
 	in := []Task{{
-		Label: " a ", Task: "x", AgentKey: " k ", LLMProfileID: &id,
+		Label: " a ", Task: "x", AgentKey: " k ",
 		Status: Succeeded, Result: "stale", Error: "stale",
 	}, {Label: "b", Task: "y", DependsOn: []string{" a "}}}
 	out, err := normalize(in)
@@ -61,10 +60,6 @@ func TestNormalizeCopiesAndResetsState(t *testing.T) {
 	}
 	if in[0].Label != " a " || in[1].DependsOn[0] != " a " {
 		t.Error("caller's slice was modified")
-	}
-	*out[0].LLMProfileID = 9
-	if id != 7 {
-		t.Error("LLMProfileID is shared with the caller")
 	}
 }
 

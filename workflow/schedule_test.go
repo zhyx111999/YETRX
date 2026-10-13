@@ -45,19 +45,18 @@ func TestIndependentTasksRunInParallelThenDependentsFollow(t *testing.T) {
 
 func TestJobCarriesOwnerAndDepth(t *testing.T) {
 	jobs := make(chan Job, 1)
-	profile := int64(5)
 	e := open(t, t.TempDir(), 1, func(ctx context.Context, job Job) (string, error) {
 		jobs <- job
 		return "ok", nil
 	})
-	id, err := e.m.Start("conv-9", "main", 1, []Task{{Label: "a", Task: "go", AgentKey: "k", LLMProfileID: &profile}})
+	id, err := e.m.Start("conv-9", "main", 1, []Task{{Label: "a", Task: "go", AgentKey: "k"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := <-jobs
 	e.next()
 	if job.RunID != id || job.OwnerSession != "conv-9" || job.OwnerAgent != "main" || job.Depth != 2 ||
-		job.Task.Label != "a" || job.Task.AgentKey != "k" || *job.Task.LLMProfileID != 5 {
+		job.Task.Label != "a" || job.Task.AgentKey != "k" {
 		t.Errorf("job = %+v", job)
 	}
 }

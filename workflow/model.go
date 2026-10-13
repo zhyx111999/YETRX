@@ -57,11 +57,10 @@ var (
 // Task is one unit of work. The first five fields are the request; the rest is
 // state maintained by the Manager (ignored by Start).
 type Task struct {
-	Label        string   `json:"label"` // unique inside the run
-	Task         string   `json:"task"`  // the prompt
-	AgentKey     string   `json:"agent_key,omitempty"`
-	LLMProfileID *int64   `json:"llm_profile_id,omitempty"` // nil = follow the owner / global profile
-	DependsOn    []string `json:"depends_on,omitempty"`     // labels of tasks that must succeed first
+	Label     string   `json:"label"` // unique inside the run
+	Task      string   `json:"task"`  // the prompt
+	AgentKey  string   `json:"agent_key,omitempty"`
+	DependsOn []string `json:"depends_on,omitempty"` // labels of tasks that must succeed first
 
 	Status     Status    `json:"status"`
 	Result     string    `json:"result,omitempty"` // full text; Read returns its tail
@@ -91,7 +90,7 @@ type Job struct {
 	OwnerSession string
 	OwnerAgent   string
 	Depth        int  // depth of the agent that runs this task; pass it to Start if that agent starts runs of its own
-	Task         Task // Label, Task, AgentKey, LLMProfileID, DependsOn
+	Task         Task // Label, Task, AgentKey, DependsOn
 	// Results maps each label in Task.DependsOn to that task's full result.
 	Results map[string]string
 }
@@ -110,10 +109,6 @@ func cloneTasks(in []Task) []Task {
 	out := make([]Task, len(in))
 	for i, t := range in {
 		t.DependsOn = append([]string(nil), t.DependsOn...)
-		if t.LLMProfileID != nil {
-			id := *t.LLMProfileID
-			t.LLMProfileID = &id
-		}
 		out[i] = t
 	}
 	return out

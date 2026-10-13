@@ -10,13 +10,12 @@ import (
 )
 
 func sampleRun(id string) Run {
-	profile := int64(3)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	return Run{
 		ID: id, OwnerSession: "conv-1", OwnerAgent: "main", Depth: 1, Status: Failed,
 		CreatedAt: now, UpdatedAt: now, FinishedAt: now,
 		Tasks: []Task{
-			{Label: "a", Task: "x", AgentKey: "k", LLMProfileID: &profile, Status: Succeeded, Result: "结果 ✓", StartedAt: now, FinishedAt: now},
+			{Label: "a", Task: "x", AgentKey: "k", Status: Succeeded, Result: "结果 ✓", StartedAt: now, FinishedAt: now},
 			{Label: "b", Task: "y", DependsOn: []string{"a"}, Status: Blocked, Error: "dep"},
 		},
 	}

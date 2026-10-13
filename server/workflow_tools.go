@@ -53,12 +53,11 @@ func conversationSessionID(session string) (int64, error) {
 // bindings as the existing orchestration tools. No Agent-specific dispatch.
 func (s *Server) workflowTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		wrTool("subagents", "在后台启动独立子任务。立即返回 run_id，结束后结果自动回到当前对话。子任务使用全局模式、模型和资源；depends_on 可连接前后步骤。", objSchema(map[string]any{
+		wrTool("subagents", "在后台启动独立子任务。立即返回 run_id，结束后结果自动回到当前对话。子任务继承当前会话实际使用的模型配置、全局资源和上下文约束；depends_on 可连接前后步骤。", objSchema(map[string]any{
 			"tasks": map[string]any{"type": "array", "minItems": 1, "maxItems": workflow.MaxTasks, "items": objSchema(map[string]any{
 				"label": strParam("本批次唯一名称"), "task": strParam("完整任务，说明输入、范围和预期结果"),
-				"agent_key":      strParam("全局模式 key；省略则沿用当前模式"),
-				"llm_profile_id": map[string]any{"type": "integer", "description": "可选的全局模型配置 ID"},
-				"depends_on":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "先完成的任务 label；成功结果会交给本任务"},
+				"agent_key":  strParam("全局模式 key；省略则沿用当前模式"),
+				"depends_on": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "先完成的任务 label；成功结果会交给本任务"},
 			}, "label", "task")},
 		}, "tasks"), s.startWorkflow),
 		wrTool("subagents_control", "管理当前对话的后台任务：list/status/read/stop/resume。read 一次读取一个子任务，最多返回末尾 8000 字符；resume 保留成功结果，仅重试未完成部分。", objSchema(map[string]any{
@@ -94,11 +93,6 @@ func (s *Server) startWorkflow(ctx context.Context, input json.RawMessage) (acto
 		}
 		if a == nil || !a.Enabled {
 			return actool.Errorf("模式不存在或未启用: " + task.AgentKey), nil
-		}
-		if task.LLMProfileID != nil {
-			if _, ok := s.loadProfileConfig(*task.LLMProfileID); !ok {
-				return actool.Errorf("模型配置不存在或未设置凭据"), nil
-			}
 		}
 	}
 	s.chatMu.Lock()

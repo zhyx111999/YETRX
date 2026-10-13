@@ -31,7 +31,7 @@ func normalize(tasks []Task) ([]Task, error) {
 			return nil, fmt.Errorf("%w: task %q has an empty prompt", ErrInvalid, t.Label)
 		}
 		seen[t.Label] = true
-		*t = Task{Label: t.Label, Task: t.Task, AgentKey: t.AgentKey, LLMProfileID: t.LLMProfileID,
+		*t = Task{Label: t.Label, Task: t.Task, AgentKey: t.AgentKey,
 			DependsOn: t.DependsOn, Status: Pending}
 	}
 

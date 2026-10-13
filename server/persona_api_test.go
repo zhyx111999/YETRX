@@ -47,7 +47,17 @@ func personaRequest(mux *http.ServeMux, method, path string, body string) *httpt
 func TestPersonaRoutesCRUDActivationAndDTO(t *testing.T) {
 	s, mux := openPersonaTestServer(t)
 	prefix := fmt.Sprintf("persona-api-%d", time.Now().UnixNano())
-	t.Cleanup(func() { _, _ = s.m.pg.Exec(`DELETE FROM personas WHERE name LIKE $1`, prefix+"%") })
+	previous, err := s.m.pg.ActivePersona()
+	if err != nil {
+		t.Fatalf("read previous active persona: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.m.pg.Exec(`DELETE FROM personas WHERE name LIKE $1`, prefix+"%")
+		_, _ = s.m.pg.Exec(`UPDATE personas SET is_active=false WHERE is_active`)
+		if previous != nil {
+			_ = s.m.pg.SetActivePersona(previous.ID)
+		}
+	})
 
 	prompt := "  原文 prompt\n第二行  "
 	create := personaRequest(mux, http.MethodPost, "/api/personas", fmt.Sprintf(`{"name":"%s-one","prompt":%s,"api_key":"must-not-leak"}`, prefix, strconv.Quote(prompt)))

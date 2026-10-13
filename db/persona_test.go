@@ -25,7 +25,17 @@ func personaTestPrefix(t *testing.T) string {
 func TestPersonaSchemaAndCRUD(t *testing.T) {
 	d := openPersonaTestDB(t)
 	prefix := personaTestPrefix(t)
-	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM personas WHERE name LIKE $1`, prefix+"%") })
+	previous, err := d.ActivePersona()
+	if err != nil {
+		t.Fatalf("read previous active persona: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM personas WHERE name LIKE $1`, prefix+"%")
+		_, _ = d.Exec(`UPDATE personas SET is_active=false WHERE is_active`)
+		if previous != nil {
+			_ = d.SetActivePersona(previous.ID)
+		}
+	})
 
 	// Reapplying the embedded schema exercises the idempotent persona migration.
 	if _, err := d.Exec(schemaSQL); err != nil {
@@ -83,8 +93,12 @@ func TestPersonaSchemaAndCRUD(t *testing.T) {
 		t.Fatalf("list did not contain test personas: %+v", personas)
 	}
 
-	if active, err := d.ActivePersona(); err != nil || active != nil {
-		t.Fatalf("initial active persona=%+v err=%v, want nil", active, err)
+	var activeTestCount int
+	if err := d.QueryRow(`SELECT count(*) FROM personas WHERE name LIKE $1 AND is_active`, prefix+"%").Scan(&activeTestCount); err != nil {
+		t.Fatal(err)
+	}
+	if activeTestCount != 0 {
+		t.Fatalf("initial test active persona count=%d, want 0", activeTestCount)
 	}
 	if err := d.SetActivePersona(firstID); err != nil {
 		t.Fatalf("activate first persona: %v", err)
@@ -108,8 +122,11 @@ func TestPersonaSchemaAndCRUD(t *testing.T) {
 	if err != nil || !cleared {
 		t.Fatalf("delete active persona: cleared=%v err=%v", cleared, err)
 	}
-	if active, err := d.ActivePersona(); err != nil || active != nil {
-		t.Fatalf("after deleting active persona=%+v err=%v, want nil", active, err)
+	if err := d.QueryRow(`SELECT count(*) FROM personas WHERE name LIKE $1 AND is_active`, prefix+"%").Scan(&activeTestCount); err != nil {
+		t.Fatal(err)
+	}
+	if activeTestCount != 0 {
+		t.Fatalf("after deleting test active persona count=%d, want 0", activeTestCount)
 	}
 	if err := d.SetActivePersona(999999999); !errors.Is(err, ErrPersonaNotFound) {
 		t.Fatalf("missing activation error=%v, want ErrPersonaNotFound", err)
@@ -119,7 +136,17 @@ func TestPersonaSchemaAndCRUD(t *testing.T) {
 func TestConcurrentPersonaActivationKeepsSingleActive(t *testing.T) {
 	d := openPersonaTestDB(t)
 	prefix := personaTestPrefix(t)
-	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM personas WHERE name LIKE $1`, prefix+"%") })
+	previous, err := d.ActivePersona()
+	if err != nil {
+		t.Fatalf("read previous active persona: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Exec(`DELETE FROM personas WHERE name LIKE $1`, prefix+"%")
+		_, _ = d.Exec(`UPDATE personas SET is_active=false WHERE is_active`)
+		if previous != nil {
+			_ = d.SetActivePersona(previous.ID)
+		}
+	})
 
 	ids := make([]int64, 2)
 	for i := range ids {

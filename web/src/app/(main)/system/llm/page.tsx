@@ -31,6 +31,7 @@ import type { LLMPoolMember, LLMPoolStatus, LLMProfile, LLMRetryOverride } from 
 import { cn } from "@/lib/utils";
 
 import { ProfileRetryFields, RetryPolicyPanel, ZERO_OVERRIDE } from "./_components/retry";
+import { PersonaPanel } from "./_components/persona-panel";
 
 // 思考开关(thinking.type)与思考强度(reasoning_effort)是两个【互相独立】的字段，
 // 各自单独设置——有些接口没有 thinking 字段、只靠强度参数就能激活思考，故需解耦。
@@ -854,6 +855,7 @@ export default function LLMPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
+      <PersonaPanel />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-semibold text-xl tracking-tight">LLM</h1>

@@ -483,6 +483,7 @@ func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, userMe
 	// Only the human-message handler supplies this field, before adding the
 	// attachment manifest. Scheduler/retest prompts must not be labelled as users.
 	if len(userMessage) == 1 {
+		ctx = agent.WithParentWorkflowPrompt(ctx)
 		ctx = intercept.WithReviewContext(ctx, "", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: userMessage[0]})
 	}
 	go s.runConversationTurn(ctx, cancel, c, msg, busyKey)

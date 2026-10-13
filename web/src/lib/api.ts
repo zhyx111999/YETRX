@@ -69,6 +69,7 @@ import type {
   NotificationDelivery,
   NotificationFilter,
   NotificationMeta,
+  Persona,
   PromptVar,
   PromptVersion,
   SessionTokenUsage,
@@ -955,6 +956,13 @@ export const api = {
       streaming,
       session_header_key,
     }),
+  // ---- global persona ----
+  personas: () => get<{ personas: Persona[] }>("/personas").then((r) => arr(r.personas)),
+  savePersona: (p: { id?: number; name: string; prompt: string }) =>
+    post<{ id: number }>("/personas", p),
+  deletePersona: (id: string) => del<{ deleted: number }>(`/personas/${id}`),
+  activatePersona: (id: string) => post<{ ok: boolean }>("/personas/active", { id: Number(id) }),
+
   llmProfiles: () => get<{ profiles: LLMProfile[] }>("/llm/profiles").then((r) => arr(r.profiles)),
   saveLLMProfile: (p: {
     id?: number; // omit/0 = create; set = update that profile

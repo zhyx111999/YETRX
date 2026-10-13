@@ -31,10 +31,11 @@ type ChatAgent struct {
 	proxyAddr      string
 	proxyCACert    string
 	webSearch      WebSearchOpts
-	guard          *guard.Guard // optional; nil disables intercept hooks for chat
-	nonStreamingFn func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn   func() bool  // resolver: use experimental noa compaction? (nil = off)
-	maxTokensFn    func() int   // resolver: per-reply output cap (nil/0 = send no cap)
+	guard          *guard.Guard  // optional; nil disables intercept hooks for chat
+	nonStreamingFn func() bool   // resolver: use non-streaming (Complete) path? (nil = streaming)
+	noaEnabledFn   func() bool   // resolver: use experimental noa compaction? (nil = off)
+	maxTokensFn    func() int    // resolver: per-reply output cap (nil/0 = send no cap)
+	personaFn      func() string // resolver: active global persona (nil/empty = no persona)
 }
 
 func NewChatAgent(prov llm.Provider, model, workDir string, tx *transcript.Store, window int) *ChatAgent {
@@ -61,6 +62,18 @@ func (c *ChatAgent) maxTokens() int {
 		return 0
 	}
 	return c.maxTokensFn()
+}
+
+// SetPersonaResolver wires the active global persona lookup. The resolver runs
+// once at the request boundary, so activation changes apply to the next turn
+// without rebuilding cached ChatAgents or touching persisted conversation data.
+func (c *ChatAgent) SetPersonaResolver(fn func() string) { c.personaFn = fn }
+
+func (c *ChatAgent) personaPrompt() string {
+	if c.personaFn == nil {
+		return ""
+	}
+	return RenderPersonaPrompt(c.personaFn())
 }
 
 // SetProxy points the chat agent's WebFetch/Bash at the recording proxy plus the
@@ -124,17 +137,32 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	defer cleanup()
 
 	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
+	appendSystem := make([]string, 0, 2)
+	if persona := c.personaPrompt(); persona != "" {
+		appendSystem = append(appendSystem, persona)
+	}
+	if HasParentWorkflowPrompt(ctx) {
+		// The external plugin sends this as a hidden parent message after a typed
+		// user turn. Native agentcore has no hidden-message channel, so keep the
+		// same request-boundary semantics as a system addendum. The raw user turn
+		// and the resumed transcript remain unchanged.
+		appendSystem = append(appendSystem, ParentWorkflowPrompt)
+	}
+	if len(appendSystem) == 0 {
+		appendSystem = nil
+	}
 	opts := agentcore.Options{
-		Provider:        c.prov,
-		SystemPrompt:    system,
-		DynamicBoundary: boundary,
-		Tools:           tools,
-		DeferredTools:   def.Deferred,
-		UnlockSet:       def.Unlock,
-		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   c.proxyAddr,
-		WebFetchCACert:  c.proxyCACert,
+		Provider:           c.prov,
+		SystemPrompt:       system,
+		AppendSystemPrompt: appendSystem,
+		DynamicBoundary:    boundary,
+		Tools:              tools,
+		DeferredTools:      def.Deferred,
+		UnlockSet:          def.Unlock,
+		PermissionMode:     permission.ModeBypass,
+		EnableWebFetch:     true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
+		WebFetchProxy:      c.proxyAddr,
+		WebFetchCACert:     c.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       ws.Enabled,

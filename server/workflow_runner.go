@@ -73,10 +73,11 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 	if mode == nil || !mode.Enabled {
 		return "", fmt.Errorf("mode %q is unavailable", key)
 	}
-	ca := s.resolveChatAgent(&db.Conversation{AgentKey: key, LLMProfileID: parent.LLMProfileID})
-	if job.Task.LLMProfileID != nil {
-		ca = s.chatAgentForProfile(*job.Task.LLMProfileID)
-	}
+	// A workflow task inherits the exact ChatAgent selected by its parent
+	// conversation. Its AgentKey still controls the child prompt/tools, but the
+	// provider, profile binding, and global fallback stay those of the current
+	// session. Subtasks have no separate model override.
+	ca := s.resolveChatAgent(parent)
 	if ca == nil {
 		return "", fmt.Errorf("%s", s.chatUnavailableReason())
 	}

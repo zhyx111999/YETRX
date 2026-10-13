@@ -480,6 +480,7 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	s.chatAgent.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	s.chatAgent.SetWebSearch(s.m.WebSearchOpts())
 	s.chatAgent.SetGuard(s.chatGuard())
+	s.wirePersona(s.chatAgent)
 	s.chatAgent.SetNonStreaming(nonStreamingResolver(cfg))
 	s.chatAgent.SetMaxTokens(maxTokensResolver(cfg))
 	s.chatAgent.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(每 run 读)
@@ -621,6 +622,7 @@ func (s *Server) chatAgentForProfile(id int64) *agent.ChatAgent {
 	ca.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	ca.SetWebSearch(s.m.WebSearchOpts())
 	ca.SetGuard(s.chatGuard())
+	s.wirePersona(ca)
 	ca.SetNonStreaming(nonStreamingResolver(cfg))
 	ca.SetMaxTokens(maxTokensResolver(cfg))
 	ca.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(每 run 读)
@@ -901,6 +903,8 @@ func (s *Server) Handler() http.Handler {
 	// Skill 可见性（按名称，更具体，优先于上面的通配路由）
 	mux.HandleFunc("GET /api/visibility/skill/{name}", s.pgSkillVisibility)
 	mux.HandleFunc("POST /api/visibility/skill/toggle", s.pgToggleSkillVisibility)
+	// 全局人格
+	s.RegisterPersonaRoutes(mux)
 	// LLM 多 profile
 	mux.HandleFunc("GET /api/llm/profiles", s.pgListProfiles)
 	mux.HandleFunc("POST /api/llm/profiles", s.pgSaveProfile)
