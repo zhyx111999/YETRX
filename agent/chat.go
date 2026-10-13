@@ -76,6 +76,15 @@ func (c *ChatAgent) personaPrompt() string {
 	return RenderPersonaPrompt(c.personaFn())
 }
 
+func hasTool(tools []actool.CoreTool, name string) bool {
+	for _, tool := range tools {
+		if tool != nil && tool.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
 // SetProxy points the chat agent's WebFetch/Bash at the recording proxy plus the
 // CA cert it trusts (empty addr = direct). Kept for parity with the other agents.
 func (c *ChatAgent) SetProxy(addr, caCert string) { c.proxyAddr, c.proxyCACert = addr, caCert }
@@ -141,11 +150,10 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	if persona := c.personaPrompt(); persona != "" {
 		appendSystem = append(appendSystem, persona)
 	}
-	if HasParentWorkflowPrompt(ctx) {
-		// The external plugin sends this as a hidden parent message after a typed
-		// user turn. Native agentcore has no hidden-message channel, so keep the
-		// same request-boundary semantics as a system addendum. The raw user turn
-		// and the resumed transcript remain unchanged.
+	if HasParentWorkflowPrompt(ctx) && hasTool(tools, "subagents") {
+		// The external plugin persists a hidden user-role message. Native YETRX
+		// keeps the user's transcript untouched and uses a transient system
+		// addendum only when this agent actually exposes the native subagents tool.
 		appendSystem = append(appendSystem, ParentWorkflowPrompt)
 	}
 	if len(appendSystem) == 0 {

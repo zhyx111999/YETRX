@@ -130,7 +130,7 @@ func (s *Server) startFindingRetest(w http.ResponseWriter, r *http.Request) {
 		s.chatMu.Lock()
 		s.chatBusy[busyKey] = true
 		s.chatMu.Unlock()
-		s.runConversation(conv, retest.InitialMessage(), busyKey)
+		s.runConversation(conv, retest.InitialMessage(), busyKey, false, "")
 	}
 	code := http.StatusOK
 	if created {

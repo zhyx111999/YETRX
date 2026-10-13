@@ -116,6 +116,8 @@ func cleanStaged(p Paths) {
 // ok=false 表示至少一边不是可比较的版本号（例如本地开发构建的 "dev" 或
 // git describe 产出的 "0.3.7-2-gabc1234-dirty"），此时调用方应禁用一键更新，
 // 否则会把开发中的构建"升级"成正式版、覆盖掉未提交的改动。
+// 正式发布版本还允许使用 YETRX 自己的 "vX.Y.Z-yetrx.N" 后缀；N 参与同一
+// 基础版本内的比较，因此同一基础版本的 .2 会被识别为高于 .1。
 func CompareVersions(a, b string) (int, bool) {
 	av, aok := parseVersion(a)
 	bv, bok := parseVersion(b)
@@ -123,38 +125,55 @@ func CompareVersions(a, b string) (int, bool) {
 		return 0, false
 	}
 	for i := range 3 {
-		if av[i] != bv[i] {
-			if av[i] < bv[i] {
+		if av.parts[i] != bv.parts[i] {
+			if av.parts[i] < bv.parts[i] {
 				return -1, true
 			}
 			return 1, true
 		}
 	}
+	if av.revision != bv.revision {
+		if av.revision < bv.revision {
+			return -1, true
+		}
+		return 1, true
+	}
 	return 0, true
 }
 
-// parseVersion 解析 "v0.3.7" / "0.3.7" 形式的版本号为 [3]int。
-//
-// 只接受纯净的三段式：build.sh 在非 tag 构建时用 git describe 产出
-// "0.3.7-2-gabc1234" 这类带后缀的版本，它们必须被判为不可比较，而不是被当成
-// 0.3.7 —— 否则开发构建会被误判为"已是最新"或被正式版覆盖。
-func parseVersion(s string) ([3]int, bool) {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "v")
+type parsedVersion struct {
+	parts    [3]int
+	revision int
+}
+
+// parseVersion 解析 "v0.3.7" / "0.3.7" 以及正式 YETRX 版本
+// "v0.2.4-yetrx.1" 为结构化版本。只接受已发布的纯净版本；git describe
+// 产出的 "0.3.7-2-gabc1234" 和 dirty 构建必须保持不可比较。
+func parseVersion(s string) (parsedVersion, bool) {
+	var out parsedVersion
+	s = strings.TrimSpace(strings.TrimPrefix(s, "v"))
 	if s == "" {
-		return [3]int{}, false
+		return out, false
 	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return [3]int{}, false
+	base := s
+	if prefix, revision, ok := strings.Cut(s, "-yetrx."); ok {
+		base = prefix
+		n, err := strconv.Atoi(revision)
+		if err != nil || n < 1 {
+			return out, false
+		}
+		out.revision = n
 	}
-	var out [3]int
+	parts := strings.Split(base, ".")
+	if len(parts) != len(out.parts) {
+		return parsedVersion{}, false
+	}
 	for i, p := range parts {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 0 {
-			return [3]int{}, false
+			return parsedVersion{}, false
 		}
-		out[i] = n
+		out.parts[i] = n
 	}
 	return out, true
 }

@@ -470,7 +470,7 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	// conv-<id>/), matching chatUpload's landing dir and agent/chat.go's sessionWorkDir
 	// — busyKey == convBusyKey(c.ID) == "conv-<id>" == that session id.
 	baseDir := filepath.Join(s.m.dir, "sessions", busyKey)
-	s.runConversation(c, composeAgentMessage(agentMessage, req.Attachments, baseDir), busyKey, msg)
+	s.runConversation(c, composeAgentMessage(agentMessage, req.Attachments, baseDir), busyKey, true, msg)
 	writeJSON(w, 202, map[string]any{"status": "accepted"})
 }
 
@@ -478,13 +478,13 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 // (each conversation is independent → parallel). Steps stream to
 // conversation_activities. Shared by the chat HTTP handler and the P3 scheduler.
 // busyKey clears when the run ends (best-effort in-flight marker).
-func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, userMessage ...string) {
+func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, humanTurn bool, humanText string) {
 	ctx, cancel := s.conversationRunContext(c.ID, busyKey)
-	// Only the human-message handler supplies this field, before adding the
-	// attachment manifest. Scheduler/retest prompts must not be labelled as users.
-	if len(userMessage) == 1 {
+	// Only the human-message handler supplies this explicit marker. Scheduler,
+	// retest, and workflow delivery prompts must not receive parent delegation guidance.
+	if humanTurn {
 		ctx = agent.WithParentWorkflowPrompt(ctx)
-		ctx = intercept.WithReviewContext(ctx, "", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: userMessage[0]})
+		ctx = intercept.WithReviewContext(ctx, "", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: humanText})
 	}
 	go s.runConversationTurn(ctx, cancel, c, msg, busyKey)
 }

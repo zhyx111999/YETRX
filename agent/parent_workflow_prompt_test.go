@@ -9,6 +9,7 @@ import (
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
+	actool "github.com/Autumn-27/norma/tool"
 )
 
 type parentPromptProvider struct {
@@ -40,13 +41,33 @@ func (p *parentPromptProvider) Stream(ctx context.Context, req llm.CompletionReq
 }
 
 func TestChatParentWorkflowPromptStaysAtRequestBoundary(t *testing.T) {
-	for _, marked := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ordinary", true: "human-turn"}[marked], func(t *testing.T) {
+	cases := []struct {
+		name         string
+		marked       bool
+		workflowTool bool
+	}{
+		{name: "ordinary", marked: false},
+		{name: "human-turn-with-subagents", marked: true, workflowTool: true},
+		{name: "human-turn-without-subagents", marked: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			provider := &parentPromptProvider{}
 			chat := NewChatAgent(provider, "fixture", t.TempDir(), nil, 100000)
 			chat.SetNonStreaming(func() bool { return true })
+			oldAugment, oldResolve := ToolAugment, ToolResolve
+			t.Cleanup(func() { ToolAugment, ToolResolve = oldAugment, oldResolve })
+			if tc.workflowTool {
+				ToolAugment = func(context.Context, string) ([]actool.CoreTool, DeferredInfo, func()) {
+					return []actool.CoreTool{actool.Build(actool.Spec{
+						Name:   "subagents",
+						Schema: map[string]any{"type": "object"},
+					})}, DeferredInfo{}, func() {}
+				}
+				ToolResolve = nil
+			}
 			ctx := context.Background()
-			if marked {
+			if tc.marked {
 				ctx = WithParentWorkflowPrompt(ctx)
 			}
 			if _, err := chat.Chat(ctx, "agent", "conv-parent-prompt", "ORIGINAL_USER_TEXT", 2, time.Minute, false, func(db.Activity) {}); err != nil {
@@ -65,8 +86,9 @@ func TestChatParentWorkflowPromptStaysAtRequestBoundary(t *testing.T) {
 			}
 			system := strings.Join(provider.request.System, "\n")
 			got := strings.Contains(system, ParentWorkflowPrompt)
-			if got != marked {
-				t.Fatalf("parent prompt present=%v, want %v; system=%q", got, marked, system)
+			want := tc.marked && tc.workflowTool
+			if got != want {
+				t.Fatalf("parent prompt present=%v, want %v; system=%q", got, want, system)
 			}
 		})
 	}
