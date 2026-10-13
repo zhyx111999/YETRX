@@ -9,6 +9,10 @@ Validation applies to the initial YETRX fork and its persistent pi conversation 
 - Server history/JWT and release-cache regressions passed. `go vet ./pibridge ./server` passed.
 - Norma image encoders and per-request thinking regressions passed; relay tests cover image content and thinking-signature replay.
 - Linux amd64 production binary built with embedded static UI and CGO disabled.
+- Deployed `v0.1.0-yetrx.1` to the existing native service. Real configured-model smoke tests executed `bash` and completed a background subagent with automatic return; the temporary conversation and its files were removed.
+- Browser checks through the live service passed: YETRX login identity, exact title, leaf icon, public source link, authenticated chat, default Agent and zero page errors.
+- Preservation checks confirmed all original activity rows, model profiles, conversations and bindings. Auto's mode and migration timestamp change as expected. All old prompt versions remain, with one new Agent default appended. The JWT signing key and service unit are unchanged.
+- SIGTERM caused the configured automatic restart; native service ownership, host namespaces, boot startup and Node HTTPS through the existing service proxy were verified. The public HTTP endpoint returned the deployed YETRX version.
 
 The full Windows `go test ./...` run does **not** pass. The same unmodified upstream checkout (`a9d11cb`) reproduces the company-scope test failure, evidence directory-sync access-denied errors, related finding/traffic errors and slash-versus-backslash skill-path assertions. One full-run task test also encountered a temporary-directory cleanup race; it passed when rerun in the isolated baseline subset. A shared-database concurrent package run caused a metering-table race; serial package execution passed metering.
 
