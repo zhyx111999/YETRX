@@ -111,7 +111,7 @@ export function LayoutControls() {
         align="end"
         className="duration-300 ease-out motion-reduce:data-open:animate-none motion-reduce:data-closed:animate-none"
       >
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-5 **:data-[slot=button]:transition-transform **:data-[slot=button]:duration-200 **:data-[slot=button]:active:scale-95 **:data-[slot=button]:motion-reduce:transition-none **:data-[slot=select-trigger]:transition-transform **:data-[slot=select-trigger]:duration-200 **:data-[slot=select-trigger]:active:scale-95 **:data-[slot=select-trigger]:motion-reduce:transition-none **:data-[slot=toggle-group-item]:transition-transform **:data-[slot=toggle-group-item]:duration-200 **:data-[slot=toggle-group-item]:active:scale-95 **:data-[slot=toggle-group-item]:motion-reduce:transition-none">
           <div className="space-y-1.5">
             <h4 className="font-medium text-sm leading-none">Preferences</h4>
             <p className="text-muted-foreground text-xs">Customize your dashboard layout preferences.</p>
@@ -171,25 +171,13 @@ export function LayoutControls() {
                 value={themeMode}
                 onValueChange={onThemeModeChange}
               >
-                <ToggleGroupItem
-                  value="light"
-                  className="transition-transform duration-200 active:scale-95 motion-reduce:transition-none"
-                  aria-label="Toggle light"
-                >
+                <ToggleGroupItem value="light" aria-label="Toggle light">
                   Light
                 </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="dark"
-                  className="transition-transform duration-200 active:scale-95 motion-reduce:transition-none"
-                  aria-label="Toggle dark"
-                >
+                <ToggleGroupItem value="dark" aria-label="Toggle dark">
                   Dark
                 </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="system"
-                  className="transition-transform duration-200 active:scale-95 motion-reduce:transition-none"
-                  aria-label="Toggle system"
-                >
+                <ToggleGroupItem value="system" aria-label="Toggle system">
                   System
                 </ToggleGroupItem>
               </ToggleGroup>
