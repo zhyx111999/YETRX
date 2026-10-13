@@ -351,6 +351,34 @@ CREATE TABLE IF NOT EXISTS main_sessions (
 );
 
 -- =====================================================================
+-- C. Global personas
+-- =====================================================================
+-- A persona is independent from agents and LLM profiles. The partial unique
+-- index permits zero active rows while enforcing at most one active row.
+CREATE TABLE IF NOT EXISTS personas (
+    id         BIGSERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    prompt     TEXT NOT NULL DEFAULT '',
+    is_active  BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- These ALTER statements make upgrades from an earlier persona table shape safe.
+ALTER TABLE personas ADD COLUMN IF NOT EXISTS prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE personas ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE personas ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE personas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+UPDATE personas SET prompt = '' WHERE prompt IS NULL;
+UPDATE personas SET is_active = false WHERE is_active IS NULL;
+ALTER TABLE personas ALTER COLUMN prompt SET NOT NULL;
+ALTER TABLE personas ALTER COLUMN is_active SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_personas_name ON personas(name);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_personas_one_active ON personas(is_active) WHERE is_active;
+DROP TRIGGER IF EXISTS trg_personas_upd ON personas;
+CREATE TRIGGER trg_personas_upd BEFORE UPDATE ON personas
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- =====================================================================
 -- C. LLM profiles
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS settings (
