@@ -1,6 +1,7 @@
 "use client";
 
 import { Monitor, Moon, Sun } from "lucide-react";
+import { flushSync } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { persistPreference } from "@/lib/preferences/preferences-storage";
@@ -16,12 +17,28 @@ export function ThemeSwitcher() {
     const currentIndex = THEME_CYCLE.indexOf(themeMode);
     const nextTheme = THEME_CYCLE[(currentIndex + 1) % THEME_CYCLE.length];
 
-    setThemeMode(nextTheme);
-    void persistPreference("theme_mode", nextTheme);
+    const applyTheme = () => {
+      setThemeMode(nextTheme);
+      void persistPreference("theme_mode", nextTheme);
+    };
+
+    if (
+      typeof document.startViewTransition === "function" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      document.startViewTransition(() => flushSync(applyTheme));
+    } else {
+      applyTheme();
+    }
   };
 
   return (
-    <Button size="icon" onClick={cycleTheme} aria-label={`Current theme: ${themeMode}. Click to cycle themes`}>
+    <Button
+      size="icon"
+      onClick={cycleTheme}
+      aria-label={`Current theme: ${themeMode}. Click to cycle themes`}
+      className="*:animate-in *:fade-in *:spin-in-90 *:zoom-in-50 *:duration-300 motion-reduce:*:animate-none"
+    >
       {/* SYSTEM */}
       <Monitor className="hidden [html[data-theme-mode=system]_&]:block" />
 
