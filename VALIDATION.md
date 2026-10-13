@@ -1,5 +1,13 @@
 # 验证记录
 
+## 全局人格与原生后台工作流模型继承（源码 e91ab24，待发布）
+
+- 新增独立全局人格表、唯一名称、最多一个激活项、并发安全激活、CRUD API 和系统 LLM 设置页管理；激活人格在每次 `ChatAgent` 请求边界动态读取，保留原始用户消息、活动和 transcript。
+- 原生 `subagents` 子任务沿用启动它的当前会话 ChatAgent 和模型配置；任务 `agent_key` 只决定提示词与资源可见性，不提供子任务级 `llm_profile_id` 覆盖。依赖结果、独立子任务 transcript/工作目录、后台自动回灌和 `Resume` 保留。
+- 父代理提示仅在人类回合显式标记、且当前模式实际暴露 `subagents` 时追加；子任务不继承该标记。自更新版本比较支持 `vX.Y.Z-yetrx.N`，开发构建后缀仍不可比较。
+- `go test ./... -run '^$'`、`go vet ./agent ./db ./selfupdate ./server ./workflow`、核心聚焦测试、`npx tsc --noEmit --pretty false` 和 Next 生产构建通过；`go test -race ./workflow` 因当前 Windows Go 环境没有可用 C 编译器未运行。
+- Persona 测试在本机没有 `ARTEX_PG_DSN` 时自然跳过 PostgreSQL 集成分支；完整 `go test ./server` 仍复现既有无数据库配置失败与 Windows `skillRelPath` 路径分隔符断言失败。
+
 ## 设置面板按钮动效：v0.2.4-yetrx.1
 
 - 设置面板容器统一给 15 个按钮控件添加按下缩放至 95%、松开还原的 200ms 过渡，覆盖两个下拉触发器、12 个 ToggleGroupItem 和恢复默认按钮；三种 Theme Mode 选项与其他设置按钮使用同一规则。
