@@ -240,6 +240,7 @@ func (s *Server) cancelConversation(id int64) {
 	if cancel != nil {
 		cancel(agent.AbortChatStoppedByUser)
 	}
+	s.stopConversationWorkflows(id)
 }
 
 // pgDeleteConversationsBatch deletes up to 100 selected conversations in one
@@ -374,11 +375,18 @@ func (s *Server) pgStopConversation(w http.ResponseWriter, r *http.Request) {
 	s.chatMu.Lock()
 	cancel := s.chatCancel[busyKey]
 	s.chatMu.Unlock()
+	if cancel != nil {
+		cancel(agent.AbortChatStoppedByUser)
+	}
+	backgroundStopped := s.stopConversationWorkflows(c.ID)
 	if cancel == nil {
-		writeJSON(w, 200, map[string]any{"status": "idle"}) // nothing running
+		status := "idle"
+		if backgroundStopped {
+			status = "stopping"
+		}
+		writeJSON(w, 200, map[string]any{"status": status})
 		return
 	}
-	cancel(agent.AbortChatStoppedByUser)
 	writeJSON(w, 200, map[string]any{"status": "stopping"})
 }
 
@@ -424,7 +432,15 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.chatBusy[busyKey] = true
+	delete(s.workflowMuted, busyKey)
 	s.chatMu.Unlock()
+	if err := s.ensureNativeHistory(c.ID); err != nil {
+		s.chatMu.Lock()
+		delete(s.chatBusy, busyKey)
+		s.chatMu.Unlock()
+		writeErr(w, 500, "历史迁移失败: "+err.Error())
+		return
+	}
 
 	// persist + float the human turn; auto-title the thread from the first message.
 	// Worker is the agent key (not "user") so the transcript stays a single lane
@@ -500,6 +516,7 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		delete(s.chatBusy, busyKey)
 		delete(s.chatCancel, busyKey)
 		s.chatMu.Unlock()
+		s.pumpWorkflowMessages(busyKey)
 	}()
 	// Only the first turn executes a historical retest. Follow-up conversation
 	// turns may explain the sealed result; the result tool refuses to overwrite it.
@@ -540,6 +557,10 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		return
 	}
 	// precedence: the conversation agent's own binding → this conversation's pin → global.
+	if err := s.ensureNativeHistory(c.ID); err != nil {
+		_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true, Summary: "历史迁移失败", Detail: err.Error()})
+		return
+	}
 	ca := s.resolveChatAgent(c)
 	if ca == nil {
 		finishReason = s.chatUnavailableReason()
@@ -608,7 +629,11 @@ func (s *Server) readTriggerBehavior(agentKey string) triggerBehavior {
 // merging by task / all / none); parallel → run each fire in its own concurrent
 // conversation up to trigger_max_parallel. Distinct agents always run concurrently.
 func (s *Server) StartTriggeredRun(agentKey, title, message string, taskID int64, mergeable bool, taskDesc, taskGoal string) {
-	if s.m.pg == nil || s.chatAgentRef() == nil {
+	if s.m.pg == nil {
+		return
+	}
+	a, err := s.m.pg.GetAgentByKey(agentKey)
+	if err != nil || a == nil || !a.Enabled || s.resolveChatAgent(&db.Conversation{AgentKey: agentKey}) == nil {
 		return
 	}
 	cfg := s.readTriggerBehavior(agentKey) // DB read BEFORE the lock (never under queueMu)

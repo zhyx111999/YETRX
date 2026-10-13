@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ARTEX cross-platform release builder.
+# YETRX cross-platform release builder.
 #
 # The default mode builds one target and embeds the already-exported frontend.
 # `./build.sh --release` builds and packages all supported desktop/server targets.
@@ -184,6 +184,8 @@ package_binary() {
   cp -R skills "$package_root/"
   cp config.example.json "$package_root/"
   if [ -f README.md ]; then cp README.md "$package_root/"; fi
+  cp LICENSE UPSTREAM_README.md "$package_root/"
+  cp web/THIRD_PARTY_NOTICES.md "$package_root/THIRD_PARTY_NOTICES.md"
   (cd "$ARTEX_PACKAGE_DIR" && zip -q -r -9 "$(basename "$archive")" "$(basename "$package_root")")
   rm -rf "$package_root"
   ok "Release 压缩包：$archive"

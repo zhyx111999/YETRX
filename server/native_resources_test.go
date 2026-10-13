@@ -20,7 +20,7 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-// 回归：所有 ChatAgent 模式（内置 auto、自定义模式，以及 key='agent' 这类原生模式）
+// 回归：所有 ChatAgent 模式（内置 Agent、自定义模式）
 // 都经同一条全局装配链拿资源——
 //
 //	ChatAgent.Chat → AugmentTools(base=SDK DefaultTools)
@@ -28,7 +28,7 @@ import (
 //	    mcp_servers + agent_visibility、hostTools(DB 自定义函数工具)
 //	  → ToolResolve(wireTools): tools 表的 描述/schema/启用/按 agent 绑定
 //
-// 这里用一个内置模式(auto)和一个新建的自定义模式做对照：同一份全局资源改一次，
+// 这里用一个内置模式(agent)和一个新建的自定义模式做对照：同一份全局资源改一次，
 // 两个模式的下一次装配都必须跟着变；绑定/可见性只影响被绑定的那个模式。
 // 需要 PostgreSQL（ARTEX_PG_DSN / config.json），不可用时跳过。
 
@@ -37,7 +37,7 @@ type nativeEnv struct {
 	t        *testing.T
 	pg       *db.DB
 	skillDir string
-	keys     []string // 对照的模式 key：[内置 auto, 自定义]
+	keys     []string // 对照的模式 key：[内置 Agent, 自定义]
 	ids      map[string]int64
 
 	skill   string // skill 目录名（= 可见性键）
@@ -47,7 +47,7 @@ type nativeEnv struct {
 	custom  string // DB 自定义函数工具 key
 }
 
-const nativeSystemTool = "list_companies" // tools 表里的内置域工具，auto 默认已绑定
+const nativeSystemTool = "list_companies" // tools 表里的内置域工具，Agent 默认已绑定
 
 func randSuffix() string {
 	b := make([]byte, 4)
@@ -119,7 +119,7 @@ func newNativeEnv(t *testing.T) *nativeEnv {
 	}
 	e.mcpTool = "mcp__" + e.mcp + "__ping"
 
-	// 模式 1：内置 auto；模式 2：新建自定义模式（key 前缀 nr_mode_，测试后删除）。
+	// 模式 1：内置 Agent；模式 2：新建自定义模式（key 前缀 nr_mode_，测试后删除）。
 	custom := "nr_mode_" + sfx
 	if _, err := pg.CreateAgent(custom, "NR 对照模式", ""); err != nil {
 		t.Fatalf("create custom mode: %v", err)
@@ -128,7 +128,7 @@ func newNativeEnv(t *testing.T) *nativeEnv {
 		_ = pg.RemoveAgentFromToolBindings(custom)
 		_ = pg.DeleteAgent(custom)
 	})
-	e.keys = []string{"auto", custom}
+	e.keys = []string{"agent", custom}
 	for _, k := range e.keys {
 		a, err := pg.GetAgentByKey(k)
 		if err != nil || a == nil {

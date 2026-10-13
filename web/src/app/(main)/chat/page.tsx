@@ -381,7 +381,7 @@ function DraftChat({
 
   // default the agent to Auto once agents load.
   React.useEffect(() => {
-    if (!agentKey && agents.some((a) => a.key === "auto")) setAgentKey("auto");
+    if (!agentKey && agents.some((a) => a.key === "agent")) setAgentKey("agent");
   }, [agentKey, agents]);
 
   const agent = agents.find((a) => a.key === agentKey);
@@ -576,13 +576,13 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // poll while a turn is running: pull new steps after the cursor.
+  // Every mode can receive background tool results after its foreground turn.
   React.useEffect(() => {
-    if (!running) return;
+    if (!historyLoaded) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      let keepPolling = true;
+      let delay = 2000;
       try {
         const r = await api.conversationMessages(conv.id, cursorRef.current);
         if (!live) return;
@@ -590,14 +590,14 @@ function ChatView({
           setMessages((prev) => mergeActivities(prev, r.items));
         }
         cursorRef.current = Math.max(cursorRef.current, r.cursor);
-        keepPolling = r.running;
+        delay = r.running ? 1000 : 2000;
         setRunning(r.running);
-        if (!r.running) onTitleMaybeChanged(); // first-turn auto-title landed
+        if (r.items.length || (running && !r.running)) onTitleMaybeChanged();
       } catch {
         /* transient — keep polling */
       } finally {
         // Slow responses must not overlap another poll with the same cursor.
-        if (live && keepPolling) timer = setTimeout(() => void tick(), 1000);
+        if (live) timer = setTimeout(() => void tick(), delay);
       }
     };
     void tick();
@@ -605,7 +605,7 @@ function ChatView({
       live = false;
       clearTimeout(timer);
     };
-  }, [running, conv.id, onTitleMaybeChanged]);
+  }, [historyLoaded, running, conv.id, onTitleMaybeChanged]);
 
   const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {
