@@ -20,6 +20,7 @@ export class SessionHost {
   #emit;
   #active = null;
   #lifecycle = Promise.resolve();
+  #abortGeneration = 0;
 
   /** @param {(record: object) => void} emit writes protocol records */
   constructor(emit) {
@@ -59,10 +60,19 @@ export class SessionHost {
    * started one, say) the message is queued behind it instead of being rejected.
    */
   async prompt({ message, streamingBehavior, systemPrompt }) {
-    const { session, hostPrompt } = await this.#current();
+    const generation = this.#abortGeneration;
+    const active = await this.#current();
+    const { session, hostPrompt } = active;
+    const ensureCurrent = () => {
+      if (generation !== this.#abortGeneration || active !== this.#active) {
+        throw new Error("prompt aborted before execution");
+      }
+    };
+    ensureCurrent();
     if (systemPrompt !== undefined) {
       // SDK queued inputs skip before_agent_start, so apply host configuration at a fresh run boundary.
       await session.waitForIdle();
+      ensureCurrent();
       hostPrompt.set(systemPrompt);
     }
     let disposition;
@@ -78,6 +88,7 @@ export class SessionHost {
   }
 
   async abort() {
+    this.#abortGeneration++;
     const { session } = await this.#current();
     await session.abort();
   }

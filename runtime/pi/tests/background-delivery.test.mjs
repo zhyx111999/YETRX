@@ -155,6 +155,32 @@ describe("background workflow results", () => {
     });
   }
 
+  it("cancels an accepted prompt waiting for an active turn instead of executing it after abort", async () => {
+    await withBridge(
+      {
+        script: (request) => {
+          const text = textFor(request, "user");
+          if (text.includes("what next")) return { text: "ready after abort" };
+          if (text.includes("MUST_NOT_RUN")) return { text: "unexpected execution" };
+          return { text: "waiting", hang: true };
+        },
+      },
+      async ({ bridge, fake }) => {
+        const first = bridge.request({ id: "p1", type: "prompt", message: "hold this turn" });
+        await bridge.waitFor((r) => r.event?.type === "agent_start", { label: "active turn" });
+        const queued = bridge.request({ id: "p2", type: "prompt", message: "MUST_NOT_RUN", systemPrompt: "CANCELED_PROMPT" });
+        assert.equal((await bridge.request({ id: "stop", type: "abort" })).ok, true);
+        const canceled = await queued;
+        assert.equal(canceled.ok, false);
+        assert.match(canceled.error, /aborted before execution/);
+        await first;
+        assert.ok(!fake.requests.some((r) => textFor(r, "user").includes("MUST_NOT_RUN")));
+        assert.equal((await prompt(bridge, "p3", "what next")).response.ok, true);
+        assert.doesNotMatch(textFor(fake.requests.at(-1), "system"), /CANCELED_PROMPT/);
+      },
+    );
+  });
+
   it("are paused, not left hanging, when the host shuts down mid-run", async () => {
     await withBridge(
       { script: delegatingRelay({ childReply: { text: "still working ", hang: true } }) },

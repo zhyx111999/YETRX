@@ -1566,7 +1566,7 @@ export interface UpdateCheck {
   /** 当前运行的版本；开发构建为 "dev" 或 git describe 的带后缀形式。 */
   current: string;
   /** 运行形态。docker 下换装只作用于容器可写层，重建容器会退回镜像版本。 */
-  mode: "docker" | "binary";
+  mode: "docker" | "binary" | "bundle";
   os: string;
   arch: string;
   repo: string;

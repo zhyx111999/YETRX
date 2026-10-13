@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -64,7 +65,7 @@ func (s *Server) pgListConversations(w http.ResponseWriter, r *http.Request) {
 	items := make([]conversationListItem, 0, len(cs))
 	s.chatMu.Lock()
 	for _, c := range cs {
-		items = append(items, conversationListItem{Conversation: c, Running: s.chatBusy[s.convBusyKey(c.ID)]})
+		items = append(items, conversationListItem{Conversation: c, Running: s.chatBusy[s.convBusyKey(c.ID)] || s.piBusy(c.ID)})
 	}
 	s.chatMu.Unlock()
 	writeJSON(w, 200, map[string]any{"conversations": items})
@@ -216,6 +217,7 @@ func (s *Server) pgDeleteConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cancelConversation(c.ID)
+	s.closePiConversation(c.ID)
 	s.cancelSideWhere(func(p sidequestion.Parent) bool { return p.ConversationID == c.ID })
 	if err := pg.DeleteConversation(c.ID); err != nil {
 		writeErr(w, 500, err.Error())
@@ -239,6 +241,13 @@ func (s *Server) cancelConversation(id int64) {
 	s.chatMu.Unlock()
 	if cancel != nil {
 		cancel(agent.AbortChatStoppedByUser)
+	}
+	if process := s.piProcess(id); process != nil && process.Busy() {
+		go func() {
+			ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+			defer done()
+			_ = process.Abort(ctx)
+		}()
 	}
 }
 
@@ -275,6 +284,7 @@ func (s *Server) pgDeleteConversationsBatch(w http.ResponseWriter, r *http.Reque
 	}
 	for _, id := range ids {
 		s.cancelConversation(id)
+		s.closePiConversation(id)
 		s.cancelSideWhere(func(p sidequestion.Parent) bool { return p.ConversationID == id })
 	}
 	deleted, err := pg.DeleteConversations(ids)
@@ -311,7 +321,7 @@ func (s *Server) pgConversationMessages(w http.ResponseWriter, r *http.Request) 
 	q := r.URL.Query()
 	limit := atoiDefault(q.Get("limit"), 200)
 	s.chatMu.Lock()
-	running := s.chatBusy[s.convBusyKey(c.ID)]
+	running := s.chatBusy[s.convBusyKey(c.ID)] || s.piBusy(c.ID)
 	s.chatMu.Unlock()
 
 	// Incremental tail: ?since=N returns steps after id N (ASC) — used by the live
@@ -374,11 +384,11 @@ func (s *Server) pgStopConversation(w http.ResponseWriter, r *http.Request) {
 	s.chatMu.Lock()
 	cancel := s.chatCancel[busyKey]
 	s.chatMu.Unlock()
-	if cancel == nil {
-		writeJSON(w, 200, map[string]any{"status": "idle"}) // nothing running
+	if cancel == nil && !s.piBusy(c.ID) {
+		writeJSON(w, 200, map[string]any{"status": "idle"})
 		return
 	}
-	cancel(agent.AbortChatStoppedByUser)
+	s.cancelConversation(c.ID)
 	writeJSON(w, 200, map[string]any{"status": "stopping"})
 }
 
@@ -411,14 +421,23 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	// conversation's chosen profile before falling back to the global config, so a
 	// conversation that picked a valid LLM is not rejected just because no global
 	// config is active.
-	if s.resolveChatAgent(c) == nil {
+	if c.AgentKey == "agent" {
+		if _, _, _, err := s.piModels(c); err != nil {
+			writeErr(w, 503, err.Error())
+			return
+		}
+		if _, err := os.Stat(piRuntimeScript()); err != nil {
+			writeErr(w, 503, "Agent 运行时尚未安装，请部署 runtime/pi 并安装其依赖")
+			return
+		}
+	} else if s.resolveChatAgent(c) == nil {
 		writeErr(w, 503, s.chatUnavailableReason())
 		return
 	}
 
 	busyKey := s.convBusyKey(c.ID)
 	s.chatMu.Lock()
-	if s.chatBusy[busyKey] {
+	if s.chatBusy[busyKey] || s.piBusy(c.ID) {
 		s.chatMu.Unlock()
 		writeErr(w, 409, "该会话正在处理上一条消息，请稍候")
 		return
@@ -467,6 +486,7 @@ func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, userMe
 	// Only the human-message handler supplies this field, before adding the
 	// attachment manifest. Scheduler/retest prompts must not be labelled as users.
 	if len(userMessage) == 1 {
+		ctx = context.WithValue(ctx, piHumanTurnKey{}, true)
 		ctx = intercept.WithReviewContext(ctx, "", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: userMessage[0]})
 	}
 	go s.runConversationTurn(ctx, cancel, c, msg, busyKey)
@@ -539,32 +559,35 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	if ctx.Err() != nil {
 		return
 	}
-	// precedence: the conversation agent's own binding → this conversation's pin → global.
-	ca := s.resolveChatAgent(c)
-	if ca == nil {
-		finishReason = s.chatUnavailableReason()
-		return
-	}
 	pg := s.m.pg
-	maxTurns := s.agentMaxTurns(c.AgentKey)
-	maxDuration := time.Duration(s.agentRunSeconds(c.AgentKey)) * time.Second
-	webSearch := false
-	if a, err := pg.GetAgentByKey(c.AgentKey); err == nil && a != nil {
-		webSearch = a.WebSearch
-	}
-	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
-	emit := func(rec db.Activity) {
-		if _, err := pg.AppendConvActivity(c.ID, rec); err != nil {
-			log.Printf("[conv %d] append activity failed: %v", c.ID, err)
+	var runErr error
+	if c.AgentKey == "agent" {
+		runErr = s.runPiConversation(ctx, c, msg)
+	} else {
+		ca := s.resolveChatAgent(c)
+		if ca == nil {
+			finishReason = s.chatUnavailableReason()
+			return
 		}
+		maxTurns := s.agentMaxTurns(c.AgentKey)
+		maxDuration := time.Duration(s.agentRunSeconds(c.AgentKey)) * time.Second
+		webSearch := false
+		if a, err := pg.GetAgentByKey(c.AgentKey); err == nil && a != nil {
+			webSearch = a.WebSearch
+		}
+		emit := func(rec db.Activity) {
+			if _, err := pg.AppendConvActivity(c.ID, rec); err != nil {
+				log.Printf("[conv %d] append activity failed: %v", c.ID, err)
+			}
+		}
+		_, runErr = ca.Chat(ctx, c.AgentKey, s.convBusyKey(c.ID), msg, maxTurns, maxDuration, webSearch, emit)
 	}
-	// On a manual stop ctx is cancelled; Chat already emits a clean "已手动停止"
-	// step, so skip the raw-error entry — only surface genuine failures.
-	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
-		finishReason = err.Error()
+	// Both runtimes emit their own stop record. Surface only unexpected failures.
+	if runErr != nil {
+		finishReason = runErr.Error()
 		if ctx.Err() == nil {
 			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,
-				Summary: "（出错：" + err.Error() + "）", Detail: err.Error()})
+				Summary: "（出错：" + runErr.Error() + "）", Detail: runErr.Error()})
 		}
 	} else {
 		finishStatus, finishReason = "completed", ""
@@ -608,7 +631,11 @@ func (s *Server) readTriggerBehavior(agentKey string) triggerBehavior {
 // merging by task / all / none); parallel → run each fire in its own concurrent
 // conversation up to trigger_max_parallel. Distinct agents always run concurrently.
 func (s *Server) StartTriggeredRun(agentKey, title, message string, taskID int64, mergeable bool, taskDesc, taskGoal string) {
-	if s.m.pg == nil || s.chatAgentRef() == nil {
+	if s.m.pg == nil {
+		return
+	}
+	a, err := s.m.pg.GetAgentByKey(agentKey)
+	if err != nil || a == nil || !a.Enabled || s.resolveChatAgent(&db.Conversation{AgentKey: agentKey}) == nil {
 		return
 	}
 	cfg := s.readTriggerBehavior(agentKey) // DB read BEFORE the lock (never under queueMu)

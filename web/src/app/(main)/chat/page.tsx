@@ -576,13 +576,16 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // poll while a turn is running: pull new steps after the cursor.
+  // Agent can receive workflow results after its foreground turn has finished.
+  // Keep a slow tail open while idle so even a short background reply is observed.
   React.useEffect(() => {
-    if (!running) return;
+    const pollWhileIdle = conv.agent_key === "agent";
+    if (!historyLoaded || (!running && !pollWhileIdle)) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       let keepPolling = true;
+      let delay = 1000;
       try {
         const r = await api.conversationMessages(conv.id, cursorRef.current);
         if (!live) return;
@@ -590,14 +593,15 @@ function ChatView({
           setMessages((prev) => mergeActivities(prev, r.items));
         }
         cursorRef.current = Math.max(cursorRef.current, r.cursor);
-        keepPolling = r.running;
+        keepPolling = r.running || pollWhileIdle;
+        delay = r.running ? 1000 : 2000;
         setRunning(r.running);
-        if (!r.running) onTitleMaybeChanged(); // first-turn auto-title landed
+        if (!r.running && (running || r.items.length > 0)) onTitleMaybeChanged();
       } catch {
         /* transient — keep polling */
       } finally {
         // Slow responses must not overlap another poll with the same cursor.
-        if (live && keepPolling) timer = setTimeout(() => void tick(), 1000);
+        if (live && keepPolling) timer = setTimeout(() => void tick(), delay);
       }
     };
     void tick();
@@ -605,7 +609,7 @@ function ChatView({
       live = false;
       clearTimeout(timer);
     };
-  }, [running, conv.id, onTitleMaybeChanged]);
+  }, [running, conv.id, conv.agent_key, historyLoaded, onTitleMaybeChanged]);
 
   const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {

@@ -95,7 +95,8 @@ func (d *DB) ListTriggersFor(agentKey string) ([]*AgentTrigger, error) {
 
 // ListEnabledTriggers returns all enabled triggers (for the scheduler).
 func (d *DB) ListEnabledTriggers() ([]*AgentTrigger, error) {
-	return d.queryTriggers(`SELECT ` + triggerCols + ` FROM agent_triggers WHERE enabled ORDER BY id`)
+	return d.queryTriggers(`SELECT ` + triggerCols + ` FROM agent_triggers t WHERE enabled
+AND EXISTS (SELECT 1 FROM agents a WHERE a.key=t.agent_key AND a.enabled) ORDER BY id`)
 }
 
 func (d *DB) queryTriggers(q string, args ...any) ([]*AgentTrigger, error) {

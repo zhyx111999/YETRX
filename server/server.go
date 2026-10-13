@@ -74,6 +74,11 @@ type Server struct {
 	// trigger queue — the drain goroutine simply proceeds to the next queued fire.
 	chatCancel map[string]context.CancelCauseFunc
 
+	// pi sessions outlive foreground turns so background workflows can deliver results.
+	piMu       sync.Mutex
+	piOnce     sync.Once
+	piSessions map[int64]*piConversation
+
 	// triggerQ buffers P3 trigger fires PER AGENT. A per-agent "pump" launches runs up
 	// to a concurrency limit derived from the agent's策略: serial → limit 1 (+ optional
 	// merge); parallel → limit = trigger_max_parallel (0=∞), no merge. triggerActive

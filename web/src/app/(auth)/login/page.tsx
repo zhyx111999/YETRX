@@ -146,6 +146,10 @@ export default function LoginPage() {
               {loading ? "登录中..." : "登录"}
             </Button>
           </form>
+          <p className="text-center text-xs text-muted-foreground">
+            <a href="https://github.com/zhyx111999/YETRX" target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">YETRX 源码 · AGPL-3.0</a>
+            {" · 基于 ARTEX"}
+          </p>
         </div>
       </div>
 
