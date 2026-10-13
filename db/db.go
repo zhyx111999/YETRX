@@ -208,7 +208,7 @@ var builtinAgents = []builtinAgent{
 		{"ProxyAddr", "记录代理地址(驱动 if 双文案)", "127.0.0.1:8080", "runtime"},
 		{"WorkerName", "worker 自我标识(可选)", "worker-1", "runtime"},
 	}, false, nil},
-	// Agent is seeded/migrated transactionally before the other built-ins.
+	// Agent uses the native conversational runner and the shared resource catalog.
 	{minimalprompt.AgentKey, minimalprompt.AgentName, "assistant", minimalprompt.AgentDescription, nil, false, intp(0)},
 	// 渗透测试:内置「独立渗透」agent。经对话页驱动,一人从侦察到收尾走完整条渗透链,自己规划自己执行自己验证。默认开启交互式 shell。
 	{"pentest", "渗透测试", "assistant", "独立渗透 agent：一人从侦察→找攻击面→深入利用→验证→收尾走完整条链，自己规划、自己执行、自己对抗式验证。", nil, true, intp(0)},
@@ -217,11 +217,11 @@ var builtinAgents = []builtinAgent{
 // seedBuiltins inserts the fixed built-in agents and their variable catalog (idempotent).
 func (d *DB) seedBuiltins() error {
 	if err := d.migrateDefaultAgent(); err != nil {
-		return fmt.Errorf("migrate default Agent: %w", err)
+		return fmt.Errorf("migrate native Agent: %w", err)
 	}
 	for _, a := range builtinAgents {
 		if a.key == minimalprompt.AgentKey {
-			continue // Already handled above; preserve subsequent user edits.
+			continue // The one-time migration owns this row; preserve later user edits.
 		}
 		var agentID int64
 		err := d.QueryRow(`
@@ -247,7 +247,9 @@ ON CONFLICT (agent_id, var_name) DO UPDATE
 	// longer advertises a name templates can't resolve (EngagementTitle→Description).
 	// 'Now' 从各 agent 目录提升为全局 runtime 变量后,旧库里 goals 仍残留一条 'Now'
 	// 会与全局项撞名(前端变量列表 key 重复);一并清掉。
-	if _, err := d.Exec(`DELETE FROM agent_prompt_vars WHERE var_name IN ('EngagementTitle', 'CoverageGaps', 'Now')`); err != nil {
+	// Keep Agent's migrated variable catalog intact.
+	if _, err := d.Exec(`DELETE FROM agent_prompt_vars WHERE var_name IN ('EngagementTitle', 'CoverageGaps', 'Now')
+AND agent_id <> (SELECT id FROM agents WHERE key='agent')`); err != nil {
 		return fmt.Errorf("cleanup renamed vars: %w", err)
 	}
 	// Default-on interactive_shell for the runtime agents (planner/worker/mainagent)

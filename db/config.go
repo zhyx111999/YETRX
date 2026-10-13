@@ -741,15 +741,21 @@ func (d *DB) CurrentPrompt(agentID int64) (string, error) {
 // SeedTool's first-insert-only philosophy: a user's edited prompt is never
 // clobbered on restart. Idempotent — a no-op once any version exists.
 func (d *DB) SeedPromptIfEmpty(agentID int64, tmpl string) error {
-	var cur sql.NullInt64
-	if err := d.QueryRow(`SELECT current_prompt_id FROM agents WHERE id=$1`, agentID).Scan(&cur); err != nil {
+	tx, err := d.Begin()
+	if err != nil {
 		return err
 	}
-	if cur.Valid {
-		return nil // already seeded or user-edited → leave it
+	defer tx.Rollback()
+	var cur sql.NullInt64
+	if err := tx.QueryRow(`SELECT current_prompt_id FROM agents WHERE id=$1 FOR UPDATE`, agentID).Scan(&cur); err != nil {
+		return err
 	}
-	_, err := d.SavePrompt(agentID, tmpl, "内置默认", "system")
-	return err
+	if !cur.Valid {
+		if _, err := savePrompt(tx, agentID, tmpl, "内置默认", "system"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ResetPromptToDefault appends the code-default template as a new version and
@@ -765,6 +771,19 @@ func (d *DB) SavePrompt(agentID int64, template, note, by string) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	var lockedID int64
+	if err := tx.QueryRow(`SELECT id FROM agents WHERE id=$1 FOR UPDATE`, agentID).Scan(&lockedID); err != nil {
+		return 0, err
+	}
+	ver, err := savePrompt(tx, agentID, template, note, by)
+	if err != nil {
+		return 0, err
+	}
+	return ver, tx.Commit()
+}
+
+// savePrompt appends a version while the caller holds the agent's write lock.
+func savePrompt(tx *sql.Tx, agentID int64, template, note, by string) (int, error) {
 	var ver int
 	if err := tx.QueryRow(`SELECT COALESCE(max(version),0)+1 FROM agent_prompts WHERE agent_id=$1`, agentID).Scan(&ver); err != nil {
 		return 0, err
@@ -777,7 +796,7 @@ func (d *DB) SavePrompt(agentID int64, template, note, by string) (int, error) {
 	if _, err := tx.Exec(`UPDATE agents SET current_prompt_id=$1 WHERE id=$2`, pid, agentID); err != nil {
 		return 0, err
 	}
-	return ver, tx.Commit()
+	return ver, nil
 }
 
 type PromptVersion struct {

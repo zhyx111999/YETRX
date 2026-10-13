@@ -40,7 +40,8 @@ func jsonResult(v any) (actool.Result, error) {
 func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools := append(s.m.HostTools(), s.orchestrationTools()...)
 	tools = append(tools, s.findingRetestTools()...)
-	tools = append(tools, s.platformTools()...) // 平台操作工具，按 agent 显式绑定
+	tools = append(tools, s.platformTools()...) // 全局平台操作工具，按模式绑定
+	tools = append(tools, s.workflowTools()...)
 	custom, err := s.customTools()
 	if err != nil {
 		log.Printf("[custom-tool] 加载失败: %v", err)
@@ -471,27 +472,28 @@ func (s *Server) deriveTaskStatus(t *Task) string {
 // are bindable per-agent (default: bound to nobody — opt-in for orchestration
 // agents). First-insert only, like the traffic seeds.
 func (s *Server) seedOrchestrationTools() {
-	// New platform tools are opt-in. Existing bindings (including historical
-	// "auto" keys) stay intact; Agent uses pi native tools and workflow only.
-	unbound := json.RawMessage(`[]`)
+	// First-insert only; all resources remain in the existing global tools table.
+	agentBindings, _ := json.Marshal([]string{"agent"})
 	for _, t := range s.orchestrationTools() {
 		schema, _ := json.Marshal(t.InputSchema())
-		bindings := unbound
+		bindings := agentBindings
 		if t.Name() == "bind_finding_traffic" {
 			bindings = json.RawMessage(`["reporter"]`)
 		}
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, bindings)
 	}
-	for _, t := range s.platformTools() {
+	for _, t := range append(s.platformTools(), s.workflowTools()...) {
 		schema, _ := json.Marshal(t.InputSchema())
-		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, unbound)
+		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, agentBindings)
 	}
 	s.refreshBuiltinToolSchemas()
+	s.seedAgentDefaultBindings()
 	s.seedPlannerDefaultBindings()
 	s.seedPlannerListAssetsBinding()
 	s.seedCompanyScopeRebind()
 	s.seedWorkerReadToolsUnbind() // list_facts/list_companies/list_worker_traces 从 worker 默认解绑(一次性)
 	s.seedWorkerReadbackRebind()  // 修复旧迁移误删：把 search_all_worker_traces/get_worker_trace/node_detail 补绑回 worker(一次性)
+	s.seedAgentReportFindingBinding()
 	s.unbindGoalMetDefault()
 	s.reseedGoalsPrompt()             // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
 	s.reseedMainAgentPrompt()         // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
@@ -777,6 +779,20 @@ func (s *Server) seedReporterAgent() {
 	log.Printf("[reporter] 已预置「报告撰写」agent + finding 触发器")
 }
 
+// seedAgentReportFindingBinding retains the original one-time migration marker.
+// Conversation-context agents can call it without requiring an intent_id.
+func (s *Server) seedAgentReportFindingBinding() {
+	const flag = "auto_report_finding_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	if err := s.m.pg.AddAgentToToolBinding("agent", []string{"report_finding"}); err != nil {
+		log.Printf("[agent] report_finding 默认绑定失败: %v", err)
+		return
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
 // seedPlannerDefaultBindings adds "planner" to report_finding's binding ONCE
 // (guarded by a settings flag), so existing DBs — whose report_finding row was
 // seeded as worker-only — also let the planner record findings. Fresh DBs already
@@ -876,6 +892,27 @@ func (s *Server) seedWorkerReadbackRebind() {
 	}); err != nil {
 		log.Printf("[worker] 回看/详情工具补绑失败: %v", err)
 		return // 出错则不落 flag，下次启动重试
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedAgentDefaultBindings preserves the upstream one-time marker, so user
+// changes to existing bindings survive the rename and subsequent restarts.
+func (s *Server) seedAgentDefaultBindings() {
+	const flag = "auto_default_bindings_v3" // v3: 替换旧资产工具名，加入 insert_assets/add_company_scope
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	keys := make([]string, 0, len(platformToolKeys)+12)
+	for _, t := range s.orchestrationTools() {
+		keys = append(keys, t.Name())
+	}
+	keys = append(keys, platformToolKeys...)
+	// Keep the original platform tool defaults.
+	keys = append(keys, "insert_assets", "add_company_scope", "list_assets")
+	if err := s.m.pg.AddAgentToToolBinding("agent", keys); err != nil {
+		log.Printf("[agent] 默认绑定失败: %v", err)
+		return
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
 }

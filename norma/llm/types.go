@@ -25,7 +25,6 @@ const (
 	BlockThinking   BlockType = "thinking"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
-	BlockImage      BlockType = "image"
 )
 
 // ContentBlock is one piece of message content. Which fields are populated
@@ -51,36 +50,6 @@ type ContentBlock struct {
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	Content   []ContentBlock `json:"content,omitempty"`
 	IsError   bool           `json:"is_error,omitempty"`
-
-	// Image block: the Anthropic image source. Valid in a user message and
-	// inside a tool_result's Content.
-	Source *ImageSource `json:"source,omitempty"`
-}
-
-// ImageSource is the Anthropic image source object: Type "base64" carries
-// MediaType (image/jpeg|png|gif|webp) and Data (standard base64), Type "url"
-// carries an http(s) URL the provider fetches.
-type ImageSource struct {
-	Type      string `json:"type"`
-	MediaType string `json:"media_type,omitempty"`
-	Data      string `json:"data,omitempty"`
-	URL       string `json:"url,omitempty"`
-}
-
-// Image source types.
-const (
-	ImageSourceBase64 = "base64"
-	ImageSourceURL    = "url"
-)
-
-// ImageBase64Block builds an image block from base64 data.
-func ImageBase64Block(mediaType, data string) ContentBlock {
-	return ContentBlock{Type: BlockImage, Source: &ImageSource{Type: ImageSourceBase64, MediaType: mediaType, Data: data}}
-}
-
-// ImageURLBlock builds an image block that references an http(s) URL.
-func ImageURLBlock(url string) ContentBlock {
-	return ContentBlock{Type: BlockImage, Source: &ImageSource{Type: ImageSourceURL, URL: url}}
 }
 
 // TextBlock builds a text content block.

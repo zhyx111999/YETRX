@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"runtime"
 	"sync"
@@ -208,15 +209,17 @@ func (h *updateHub) subscribe() (<-chan updateProgress, func()) {
 // 不如在检查这一步就如实报错。
 func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	current := BuildVersion
-	mode := "bundle"
+	mode := "binary"
+	if selfupdate.InDocker() {
+		mode = "docker"
+	}
 	boot := bootUpdateState()
 	out := map[string]any{
 		"current":     current,
 		"mode":        mode,
 		"os":          runtime.GOOS,
 		"arch":        runtime.GOARCH,
-		"has_backup":  false,
-		"reason":      "YETRX 更新需一起部署程序与 Agent 运行时，请按源码仓库中的部署说明更新。",
+		"has_backup":  selfupdate.HasBackup(),
 		"repo":        selfupdate.Repo,
 		"boot_notice": boot.Detail,
 		"rolled_back": boot.RolledBack,
@@ -260,14 +263,70 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// updateApply rejects binary-only installation; YETRX also requires the matching pi runtime.
+// updateApply 下载并暂存新版本，完成后让进程退出交给守护脚本重启。
+//
+// 立刻返回 202，实际工作在后台 goroutine 上跑：整包下载可能要几分钟，
+// 挂在请求上会被反代超时掐断。进度走 /api/update/stream。
 func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, http.StatusConflict, "YETRX 更新需一起部署程序与 Agent 运行时，请按源码仓库中的部署说明更新")
+	current := BuildVersion
+
+	// 走缓存：确保装上的就是用户在界面上看到并确认的那个版本。
+	client := selfupdate.NewClient(s.m.GlobalProxy())
+	rel, err := relCache.get(r.Context(), client, false)
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	cmp, comparable := selfupdate.CompareVersions(current, rel.TagName)
+	if !comparable {
+		writeErr(w, 400, fmt.Sprintf("当前版本 %q 不是正式发布版本，已禁用一键更新", current))
+		return
+	}
+	if cmp >= 0 {
+		writeErr(w, 400, fmt.Sprintf("当前已是最新版本 %s", current))
+		return
+	}
+	if !updHub.begin(rel.TagName) {
+		writeErr(w, 409, "已有一个更新正在进行中")
+		return
+	}
+
+	go func() {
+		// 刻意用 s.ctx 而不是请求的 ctx：HTTP 响应一返回请求就结束了，
+		// 挂在它上面下载会立刻被取消。
+		err := selfupdate.Stage(s.ctx, client, rel, current, func(ph selfupdate.Phase, pct int, msg string) {
+			updHub.publish(ph, pct, msg)
+		})
+		updHub.finish(err)
+		if err != nil {
+			log.Printf("[update] 更新失败：%v", err)
+			return
+		}
+		log.Printf("[update] %s → %s 已暂存，即将退出以完成换装", current, rel.TagName)
+		// 留一点时间把最后一条进度推给前端，再触发退出。
+		time.Sleep(1500 * time.Millisecond)
+		requestRestart()
+	}()
+
+	writeJSON(w, 202, map[string]any{"ok": true, "target": rel.TagName})
 }
 
-// updateRollback rejects binary-only rollback because it cannot restore the pi bundle.
+// updateRollback 主动退回上一版本（换装前备份的 artex.old）。
 func (s *Server) updateRollback(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, http.StatusConflict, "YETRX 回滚需恢复配套程序与 Agent 运行时，请使用完整部署备份")
+	if _, running := updHub.snapshot(); running {
+		writeErr(w, 409, "更新正在进行中，无法回滚")
+		return
+	}
+	if err := selfupdate.Rollback(); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	log.Printf("[update] 已手动回滚到上一版本，即将退出以完成切换")
+	writeJSON(w, 202, map[string]any{"ok": true})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		requestRestart()
+	}()
 }
 
 // updateStream 以 SSE 推送更新进度。

@@ -379,9 +379,9 @@ function DraftChat({
   const [sending, setSending] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
 
-  // Default to Agent once the available modes load.
+  // default the agent to Auto once agents load.
   React.useEffect(() => {
-    if (!agentKey && agents.some((a) => a.key === "agent" && a.enabled)) setAgentKey("agent");
+    if (!agentKey && agents.some((a) => a.key === "agent")) setAgentKey("agent");
   }, [agentKey, agents]);
 
   const agent = agents.find((a) => a.key === agentKey);
@@ -576,16 +576,13 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // Agent can receive workflow results after its foreground turn has finished.
-  // Keep a slow tail open while idle so even a short background reply is observed.
+  // Every mode can receive background tool results after its foreground turn.
   React.useEffect(() => {
-    const pollWhileIdle = conv.agent_key === "agent";
-    if (!historyLoaded || (!running && !pollWhileIdle)) return;
+    if (!historyLoaded) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      let keepPolling = true;
-      let delay = 1000;
+      let delay = 2000;
       try {
         const r = await api.conversationMessages(conv.id, cursorRef.current);
         if (!live) return;
@@ -593,15 +590,14 @@ function ChatView({
           setMessages((prev) => mergeActivities(prev, r.items));
         }
         cursorRef.current = Math.max(cursorRef.current, r.cursor);
-        keepPolling = r.running || pollWhileIdle;
         delay = r.running ? 1000 : 2000;
         setRunning(r.running);
-        if (!r.running && (running || r.items.length > 0)) onTitleMaybeChanged();
+        if (r.items.length || (running && !r.running)) onTitleMaybeChanged();
       } catch {
         /* transient — keep polling */
       } finally {
         // Slow responses must not overlap another poll with the same cursor.
-        if (live && keepPolling) timer = setTimeout(() => void tick(), delay);
+        if (live) timer = setTimeout(() => void tick(), delay);
       }
     };
     void tick();
@@ -609,7 +605,7 @@ function ChatView({
       live = false;
       clearTimeout(timer);
     };
-  }, [running, conv.id, conv.agent_key, historyLoaded, onTitleMaybeChanged]);
+  }, [historyLoaded, running, conv.id, onTitleMaybeChanged]);
 
   const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {
@@ -1202,12 +1198,9 @@ export default function ChatPage() {
     [visibleConversations, agentByKey],
   );
   // conversation agents: custom agents + conversational built-ins (role=assistant,
-  // e.g. Agent / 渗透测试). The orchestration built-ins (goals/planner/mainagent/worker)
+  // e.g. Auto / 渗透测试). The orchestration built-ins (goals/planner/mainagent/worker)
   // are task-specific and stay hidden from the chat page.
-  const chatAgents = React.useMemo(
-    () => agents.filter((a) => !a.builtin || (a.role === "assistant" && a.key !== "auto")),
-    [agents],
-  );
+  const chatAgents = React.useMemo(() => agents.filter((a) => !a.builtin || a.role === "assistant"), [agents]);
   const agentFilterOptions = React.useMemo(() => {
     const counts = new Map<string, number>();
     for (const conversation of convs) {

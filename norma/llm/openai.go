@@ -18,39 +18,6 @@ type oaMessage struct {
 	ReasoningContent string       `json:"reasoning_content,omitempty"`
 	ToolCalls        []oaToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string       `json:"tool_call_id,omitempty"`
-	// Parts, when set, replaces Content with a content-part array (user
-	// messages carrying images).
-	Parts []oaPart `json:"-"`
-}
-
-// oaPart is one Chat Completions content part: text or image_url.
-type oaPart struct {
-	Type     string      `json:"type"`
-	Text     string      `json:"text,omitempty"`
-	ImageURL *oaImageURL `json:"image_url,omitempty"`
-}
-
-type oaImageURL struct {
-	URL string `json:"url"`
-}
-
-func oaTextPart(s string) oaPart { return oaPart{Type: "text", Text: s} }
-
-func oaImagePart(s *ImageSource) oaPart {
-	return oaPart{Type: "image_url", ImageURL: &oaImageURL{URL: s.imageURL()}}
-}
-
-// MarshalJSON emits Parts as the content array when present; otherwise the
-// message marshals exactly as its fields say.
-func (m oaMessage) MarshalJSON() ([]byte, error) {
-	type plain oaMessage // no methods: avoids recursing into MarshalJSON
-	if len(m.Parts) == 0 {
-		return json.Marshal(plain(m))
-	}
-	return json.Marshal(struct {
-		plain
-		Content []oaPart `json:"content"` // shadows plain.Content
-	}{plain(m), m.Parts})
 }
 
 type oaToolCall struct {
@@ -83,14 +50,14 @@ type oaReq struct {
 	// MaxTokens and MaxCompletionTokens are mutually exclusive: buildBody fills
 	// exactly one of them per Config.MaxTokensField, and omitempty drops the
 	// other. Sending both would make OpenAI reject the request.
-	MaxTokens           int           `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int           `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64      `json:"temperature,omitempty"`
-	Stop                []string      `json:"stop,omitempty"`
-	Thinking            *oaThinking   `json:"thinking,omitempty"`
-	ReasoningEffort     string        `json:"reasoning_effort,omitempty"`
-	Stream              bool          `json:"stream"`
-	StreamOptions       *oaStreamOpts `json:"stream_options,omitempty"`
+	MaxTokens           int      `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int      `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64 `json:"temperature,omitempty"`
+	Stop            []string      `json:"stop,omitempty"`
+	Thinking        *oaThinking   `json:"thinking,omitempty"`
+	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	Stream          bool          `json:"stream"`
+	StreamOptions   *oaStreamOpts `json:"stream_options,omitempty"`
 }
 
 type oaStreamOpts struct {
@@ -150,37 +117,17 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 			out = append(out, om)
 		case RoleUser:
 			var text strings.Builder
-			var parts []oaPart // the same content, in order, once images are involved
-			hasImage := false
 			var toolMsgs []oaMessage
-			var toolImages []oaPart
 			for _, b := range m.Content {
 				switch b.Type {
 				case BlockText:
 					text.WriteString(b.Text)
-					if b.Text != "" {
-						parts = append(parts, oaTextPart(b.Text))
-					}
-				case BlockImage:
-					if b.Source != nil {
-						parts = append(parts, oaImagePart(b.Source))
-						hasImage = true
-					}
 				case BlockToolResult:
-					toolText, images := toolResultParts(b)
-					toolMsgs = append(toolMsgs, oaMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: toolText})
-					for _, img := range images {
-						toolImages = append(toolImages, oaImagePart(img))
-					}
+					toolMsgs = append(toolMsgs, oaMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: flattenText(b.Content)})
 				}
 			}
 			out = append(out, toolMsgs...)
-			if len(toolImages) > 0 {
-				out = append(out, oaMessage{Role: "user", Parts: append([]oaPart{oaTextPart(toolResultImageNote)}, toolImages...)})
-			}
-			if hasImage {
-				out = append(out, oaMessage{Role: "user", Parts: parts})
-			} else if s := text.String(); s != "" {
+			if s := text.String(); s != "" {
 				out = append(out, oaMessage{Role: "user", Content: s})
 			}
 		}

@@ -43,8 +43,8 @@ ON CONFLICT (key) DO NOTHING`, key, desc, schema, agents)
 }
 
 // AddAgentToToolBinding adds an agent key to the given tools' `agents` arrays if
-// not already present (idempotent). Used to give the built-in Auto agent its
-// default toolset on existing DBs.
+// not already present (idempotent). Callers gate default-binding migrations so
+// later user removals are preserved.
 func (d *DB) AddAgentToToolBinding(agentKey string, keys []string) error {
 	for _, k := range keys {
 		if _, err := d.Exec(`UPDATE tools SET agents = agents || to_jsonb($1::text) WHERE key=$2 AND NOT (agents ? $1)`, agentKey, k); err != nil {

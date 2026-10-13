@@ -52,36 +52,6 @@ type orInputItem struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 	Output    string `json:"output,omitempty"`
-	// Parts, when set, replaces Content with a content-part array (user
-	// messages carrying images).
-	Parts []orPart `json:"-"`
-}
-
-// orPart is one Responses input content part: input_text or input_image.
-type orPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-}
-
-func orTextPart(s string) orPart { return orPart{Type: "input_text", Text: s} }
-
-func orImagePart(s *ImageSource) orPart {
-	return orPart{Type: "input_image", ImageURL: s.imageURL(), Detail: "auto"}
-}
-
-// MarshalJSON emits Parts as the content array when present; otherwise the item
-// marshals exactly as its fields say.
-func (it orInputItem) MarshalJSON() ([]byte, error) {
-	type plain orInputItem // no methods: avoids recursing into MarshalJSON
-	if len(it.Parts) == 0 {
-		return json.Marshal(plain(it))
-	}
-	return json.Marshal(struct {
-		plain
-		Content []orPart `json:"content"` // shadows plain.Content
-	}{plain(it), it.Parts})
 }
 
 type orTool struct {
@@ -114,83 +84,43 @@ func (p *openaiResponsesProvider) buildBody(req CompletionRequest, stream bool) 
 }
 
 // toResponsesInput flattens neutral messages into Responses input items: text
-// becomes a role message (string content; a content-part array once the message
-// carries an image), tool_use becomes a function_call, and tool_result becomes a
-// function_call_output (its images follow as one user message, see image.go).
-// Thinking blocks are dropped on replay (mirrors the Chat Completions adapter's
-// default and avoids echoing provider-specific reasoning state the Responses API
-// manages itself).
+// becomes a role message (string content), tool_use becomes a function_call, and
+// tool_result becomes a function_call_output. Thinking blocks are dropped on
+// replay (mirrors the Chat Completions adapter's default and avoids echoing
+// provider-specific reasoning state the Responses API manages itself).
 func toResponsesInput(msgs []Message) []orInputItem {
 	var out []orInputItem
 	for _, m := range msgs {
 		role := string(m.Role)
-		var parts []orPart
-		var toolImages []orPart
-		// flushContent emits accumulated text/images as a role message, preserving
-		// block order: content that precedes a tool_use/tool_result must appear
+		var text strings.Builder
+		// flushText emits accumulated text as a role message, preserving block
+		// order: a text block that precedes a tool_use/tool_result must appear
 		// before that item in the input array, not after it.
-		flushContent := func() {
-			if len(parts) == 0 {
-				return
-			}
-			out = append(out, contentItem(role, parts))
-			parts = nil
-		}
-		// flushToolImages emits the images lifted out of the tool results just
-		// emitted, right after that run of function_call_output items.
-		flushToolImages := func() {
-			if len(toolImages) > 0 {
-				out = append(out, orInputItem{Role: "user", Parts: append([]orPart{orTextPart(toolResultImageNote)}, toolImages...)})
-				toolImages = nil
+		flushText := func() {
+			if s := text.String(); s != "" {
+				out = append(out, orInputItem{Role: role, Content: s})
+				text.Reset()
 			}
 		}
 		for _, b := range m.Content {
-			if b.Type != BlockToolResult {
-				flushToolImages()
-			}
 			switch b.Type {
 			case BlockText:
-				if b.Text != "" {
-					parts = append(parts, orTextPart(b.Text))
-				}
-			case BlockImage:
-				if b.Source != nil {
-					parts = append(parts, orImagePart(b.Source))
-				}
+				text.WriteString(b.Text)
 			case BlockToolUse:
-				flushContent()
+				flushText()
 				args := string(b.Input)
 				if strings.TrimSpace(args) == "" {
 					args = "{}"
 				}
 				out = append(out, orInputItem{Type: "function_call", CallID: b.ID, Name: b.Name, Arguments: args})
 			case BlockToolResult:
-				flushContent()
-				text, images := toolResultParts(b)
-				out = append(out, orInputItem{Type: "function_call_output", CallID: b.ToolUseID, Output: text})
-				for _, img := range images {
-					toolImages = append(toolImages, orImagePart(img))
-				}
+				flushText()
+				out = append(out, orInputItem{Type: "function_call_output", CallID: b.ToolUseID, Output: flattenText(b.Content)})
 			}
 		}
-		flushContent()
-		flushToolImages()
+		flushText()
 	}
 	return out
-}
-
-// contentItem builds a role message from ordered parts: plain string content
-// when they are all text (the concatenation the adapter always sent), a part
-// array when any is an image.
-func contentItem(role string, parts []orPart) orInputItem {
-	var text strings.Builder
-	for _, p := range parts {
-		if p.Type == "input_image" {
-			return orInputItem{Role: role, Parts: parts}
-		}
-		text.WriteString(p.Text)
-	}
-	return orInputItem{Role: role, Content: text.String()}
 }
 
 func (p *openaiResponsesProvider) setHeaders(r *http.Request) {

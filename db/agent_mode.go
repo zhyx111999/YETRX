@@ -2,16 +2,16 @@ package db
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/Autumn-27/artex/minimalprompt"
 )
 
-// migrateDefaultAgent runs before the other seeds. Renaming the old row keeps
-// its ID, LLM profile and prompt history. The new key itself is the completion
-// marker: the entire change commits atomically, and later starts never reseed an
-// existing builtin Agent's settings, bindings or prompt.
+const nativeAgentMigration = "native_agent_v1"
+
+// migrateDefaultAgent runs before seeding and commits the key, prompt, references
+// and completion marker together. The marker is distinct from the old pi migration,
+// whose existing agent key alone cannot tell us whether native migration has run.
 func (d *DB) migrateDefaultAgent() error {
 	tx, err := d.Begin()
 	if err != nil {
@@ -19,90 +19,119 @@ func (d *DB) migrateDefaultAgent() error {
 	}
 	defer tx.Rollback()
 
-	// Also protect the absent-key case from concurrent inserts. Open already
-	// serializes startup with the schema lock; this lock covers runtime writers
-	// and direct seed calls without acquiring that session lock a second time.
-	if _, err := tx.Exec(`LOCK TABLE agents IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+	// Cover concurrent migrations and inserts of absent keys. EXCLUSIVE also
+	// serializes with SavePrompt's SELECT FOR UPDATE before either writes, while
+	// ordinary readers can continue. Do not re-acquire Open's session schema lock.
+	if _, err := tx.Exec(`LOCK TABLE agents IN EXCLUSIVE MODE`); err != nil {
 		return err
 	}
-	type candidate struct {
-		id      int64
-		builtin bool
+	var legacyID, agentID int64
+	var legacyBuiltin, agentBuiltin bool
+	if err := tx.QueryRow(`SELECT id, builtin FROM agents WHERE key='auto'`).Scan(&legacyID, &legacyBuiltin); err != nil && err != sql.ErrNoRows {
+		return err
 	}
-	lookup := func(key string) (candidate, error) {
-		var a candidate
-		err := tx.QueryRow(`SELECT id, builtin FROM agents WHERE key=$1`, key).Scan(&a.id, &a.builtin)
-		if errors.Is(err, sql.ErrNoRows) {
-			return candidate{}, nil
-		}
-		return a, err
+	if err := tx.QueryRow(`SELECT id, builtin FROM agents WHERE key=$1`, minimalprompt.AgentKey).Scan(&agentID, &agentBuiltin); err != nil && err != sql.ErrNoRows {
+		return err
 	}
-	current, err := lookup(minimalprompt.AgentKey)
+	if agentID != 0 && !agentBuiltin {
+		return fmt.Errorf("agent key conflict: custom agent (id=%d) already uses key agent; rename it before retrying", agentID)
+	}
+	if agentID != 0 && legacyBuiltin {
+		return fmt.Errorf("agent key conflict: builtin auto (id=%d) and agent (id=%d) both exist; resolve without discarding either history", legacyID, agentID)
+	}
+	var completed string
+	if err := tx.QueryRow(`SELECT value FROM settings WHERE key=$1`, nativeAgentMigration).Scan(&completed); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if completed == "done" {
+		return tx.Commit()
+	}
+
+	if legacyBuiltin {
+		agentID = legacyID
+		// Preserve custom budgets; only the upstream Auto time default changes.
+		_, err = tx.Exec(`UPDATE agents SET key=$1,
+run_seconds=CASE WHEN run_seconds=1200 THEN 0 ELSE run_seconds END WHERE id=$2`, minimalprompt.AgentKey, agentID)
+	} else if agentID == 0 {
+		err = tx.QueryRow(`INSERT INTO agents(key, name, description, role, builtin, max_turns, run_seconds)
+VALUES ($1, $2, $3, 'assistant', true, 0, 0) RETURNING id`,
+			minimalprompt.AgentKey, minimalprompt.AgentName, minimalprompt.AgentDescription).Scan(&agentID)
+	}
 	if err != nil {
 		return err
 	}
-	if current.id != 0 && !current.builtin {
-		return fmt.Errorf("agent key conflict: non-builtin agent %q (id=%d) already exists; rename its key before retrying", minimalprompt.AgentKey, current.id)
-	}
-	legacy, err := lookup("auto")
-	if err != nil {
+	// Built-in identity changes once. Keep edited metadata and all resource,
+	// model, enabled, shell and web-search settings, including pi-disabled rows.
+	if _, err := tx.Exec(`UPDATE agents SET
+name=CASE WHEN name IN ('Auto','Agent') THEN $1 ELSE name END,
+description=CASE WHEN description IN ($2,$3) THEN $4 ELSE description END,
+role='assistant' WHERE id=$5`, minimalprompt.AgentName,
+		"平台操作助手：用工具管理任务(建/看/暂停/给提示)与资产，并可创建/修改 skill、自定义工具、MCP。",
+		"通用对话助手，使用 pi 原生工具与 workflow，按需读取 skills。",
+		minimalprompt.AgentDescription, agentID); err != nil {
 		return err
 	}
-	if current.id != 0 && legacy.builtin {
-		return fmt.Errorf("agent key conflict: builtin auto (id=%d) and agent (id=%d) both exist; resolve without discarding either history before retrying", legacy.id, current.id)
-	}
 
-	if current.id == 0 {
-		agentID := legacy.id
-		if legacy.builtin {
-			_, err = tx.Exec(`UPDATE agents SET key=$1, name=$2, description=$3,
-role='assistant', builtin=true, enabled=true, max_turns=0, run_seconds=0,
-interactive_shell=false, web_search=false WHERE id=$4`,
-				minimalprompt.AgentKey, minimalprompt.AgentName, minimalprompt.AgentDescription, agentID)
-		} else {
-			err = tx.QueryRow(`INSERT INTO agents
-(key, name, description, role, builtin, enabled, max_turns, run_seconds, interactive_shell, web_search)
-VALUES ($1, $2, $3, 'assistant', true, true, 0, 0, false, false) RETURNING id`,
-				minimalprompt.AgentKey, minimalprompt.AgentName, minimalprompt.AgentDescription).Scan(&agentID)
-		}
-		if err != nil {
+	var current sql.NullInt64
+	var template, author sql.NullString
+	if err := tx.QueryRow(`SELECT a.current_prompt_id, p.template_text, p.updated_by
+FROM agents a LEFT JOIN agent_prompts p ON p.id=a.current_prompt_id WHERE a.id=$1`, agentID).Scan(&current, &template, &author); err != nil {
+		return err
+	}
+	if !current.Valid || (author.String == "system" && (template.String == legacyAutoPrompt || template.String == legacyPiPrompt)) {
+		if _, err := savePrompt(tx, agentID, minimalprompt.Default, "Agent: native tools", "system"); err != nil {
 			return err
 		}
+	}
 
-		if legacy.builtin {
-			// ID-based visibility would otherwise silently carry Auto's tools and
-			// skills (including api-recon) into Agent. Retain every binding row,
-			// but deactivate it; later explicit user edits are left alone.
-			if _, err := tx.Exec(`UPDATE agent_visibility SET enabled=false WHERE agent_id=$1 AND enabled`, agentID); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`UPDATE agent_skill_visibility SET enabled=false WHERE agent_id=$1 AND enabled`, agentID); err != nil {
+	// A custom auto keeps its own conversations and bindings. Otherwise migrate
+	// old key references too, including those left behind by the pi deployment.
+	if legacyID == 0 || legacyBuiltin {
+		for _, query := range []string{
+			`UPDATE conversations SET agent_key='agent' WHERE agent_key='auto'`,
+			`UPDATE agent_triggers SET agent_key='agent' WHERE agent_key='auto'`,
+			`UPDATE tools SET agents=(SELECT jsonb_agg(
+CASE WHEN value='"auto"'::jsonb THEN '"agent"'::jsonb ELSE value END ORDER BY ord)
+FROM jsonb_array_elements(agents) WITH ORDINALITY AS binding(value, ord))
+WHERE agents @> '["auto"]'::jsonb`,
+		} {
+			if _, err := tx.Exec(query); err != nil {
 				return err
 			}
 		}
-
-		// Archiving means leaving all old versions (including user edits) intact
-		// and moving only the current pointer to a newly appended version.
-		var promptID int64
-		if err := tx.QueryRow(`INSERT INTO agent_prompts (agent_id, version, template_text, note, updated_by)
-SELECT $1, COALESCE(MAX(version), 0)+1, $2, 'Agent: pi native tools and workflow', 'system'
-FROM agent_prompts WHERE agent_id=$1 RETURNING id`, agentID, minimalprompt.Default).Scan(&promptID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE agents SET current_prompt_id=$1 WHERE id=$2`, promptID, agentID); err != nil {
-			return err
-		}
 	}
-
-	// A custom agent that happens to be named auto is not the retired builtin.
-	// With no such custom agent, historical Auto conversations keep their IDs,
-	// activities and LLM pins and continue under Agent.
-	if legacy.id == 0 || legacy.builtin {
-		if _, err := tx.Exec(`UPDATE conversations SET agent_key=$1 WHERE agent_key='auto'`, minimalprompt.AgentKey); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(`INSERT INTO settings(key, value) VALUES ($1, 'done')
+ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, nativeAgentMigration); err != nil {
+		return err
 	}
-	// tools.agents JSON and agent_triggers retain their old keys and settings.
-	// Rewriting them would silently enable platform behavior under the new mode.
 	return tx.Commit()
 }
+
+// Exact former defaults, recognized only when saved by the system.
+// Edited prompts stay current; all versions remain in agent_prompts.
+const legacyAutoPrompt = `你是 **Auto**，这个渗透测试平台的「操作助手」。你不亲自渗透，而是**用工具操作平台**、按用户指令把事情办好。
+
+你能做的（取决于给你开放了哪些工具）：
+1. **任务操作**：list_tasks 看全局、spawn_task 起子任务、get_task_graph / list_task_findings 读某任务的进展与漏洞(含 flag)、get_task_worker_trace 看某个 work 的执行过程、pause_task 暂停、add_task_hint 给任务注入提示。
+2. **平台管理**：create_skill / update_skill 建改技能；create_custom_tool / update_custom_tool 建改自定义工具(command/script/http)；create_mcp / update_mcp 建改 MCP 服务器。
+
+原则：
+- 先看清现状(list_tasks / get_task_graph 等)再动手；一步到位、少空转。
+- 建/改 skill、工具、MCP 时，把用户意图翻译成正确的结构化参数(kind/exec/schema 等)，字段拿不准就按最小可用填。
+- 用人话简洁汇报你做了什么、结果如何；只根据工具真实返回作答，不臆造。
+- 只在授权范围内操作。`
+
+const legacyPiPrompt = `You work inside the user's workspace and act through the tools below. Do what was asked, check results before reporting them, and say plainly what you did and what you could not do.
+
+Tools:
+- read: read a file (text or image).
+- bash: run a shell command in the working directory.
+- edit: replace exact text in an existing file.
+- write: create or overwrite a file.
+- grep: search file contents (when enabled).
+- find: find files by name pattern (when enabled).
+- ls: list a directory (when enabled).
+- subagents: start background subagents; it returns a run id at once and the result is delivered back into this conversation when the run finishes.
+- subagents_control: check, read, message, stop or resume a background run.
+
+Skills listed below are loaded on demand: read a skill's SKILL.md when its description matches the task.`

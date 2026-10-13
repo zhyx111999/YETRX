@@ -134,6 +134,7 @@ func run() int {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+	srv.WaitBackground(shutdownCtx)
 	return code
 }
 

@@ -1,21 +1,18 @@
-# YETRX validation · 2026-10-13
+# 验证记录
 
-Validation applies to the initial YETRX fork and its persistent pi conversation integration.
+本轮从上游 `a9d11cb` 重建原生版本，未沿用旧版 pi 执行分支。
 
-- Production Next.js static export and TypeScript checks passed (32 pages).
-- Actual pi SDK runtime suite: **40 passed, 0 failed**. Covers nine tools, three skills, real subagent/background delivery, model and prompt updates, canceling pending input, history restoration and credential isolation. No real upstream keys are needed.
-- `pibridge` package passed, including actual Go process client → pi SDK → authenticated Go relay → fake model, a real file read, prompt replacement, session restart and activity persistence.
-- `db` package passed with explicit disposable PostgreSQL 16, including migration preservation, concurrency, collision handling, rollback/retry, idempotence and retired-trigger scheduling.
-- Server history/JWT and release-cache regressions passed. `go vet ./pibridge ./server` passed.
-- Norma image encoders and per-request thinking regressions passed; relay tests cover image content and thinking-signature replay.
-- Linux amd64 production binary built with embedded static UI and CGO disabled.
-- Deployed `v0.1.0-yetrx.1` to the existing native service. Real configured-model smoke tests executed `bash` and completed a background subagent with automatic return; the temporary conversation and its files were removed.
-- Browser checks through the live service passed: YETRX login identity, exact title, leaf icon, public source link, authenticated chat, default Agent and zero page errors.
-- Preservation checks confirmed all original activity rows, model profiles, conversations and bindings. Auto's mode and migration timestamp change as expected. All old prompt versions remain, with one new Agent default appended. The JWT signing key and service unit are unchanged.
-- SIGTERM caused the configured automatic restart; native service ownership, host namespaces, boot startup and Node HTTPS through the existing service proxy were verified. The public HTTP endpoint returned the deployed YETRX version.
+已完成：
 
-The full Windows `go test ./...` run does **not** pass. The same unmodified upstream checkout (`a9d11cb`) reproduces the company-scope test failure, evidence directory-sync access-denied errors, related finding/traffic errors and slash-versus-backslash skill-path assertions. One full-run task test also encountered a temporary-directory cleanup race; it passed when rerun in the isolated baseline subset. A shared-database concurrent package run caused a metering-table race; serial package execution passed metering.
+- 前端生产构建、TypeScript 检查和全部 32 个静态页面生成。
+- `go test ./workflow`：并行与依赖、并发上限、停止/恢复、重启中断、状态保存、会话归属和结果截取。
+- 独立 PostgreSQL 16 上的原生资源回归：内置 Agent 与自定义模式共用同一技能、MCP、函数工具；编辑、禁用和绑定变化都按原规则生效；使用真实 ChatAgent 和假模型执行真实函数工具/MCP 调用。
+- 原生后台接入回归：子任务使用全局资源，前台轮次占用期间等待回传，结束后自动汇总并保存；停止后不再启动排队回复；已取消的请求不能创建后台任务。
+- 旧版会话衔接回归：活动账本不改写，保留上下文和原 transcript 副本，旧工具调用不重放，同一会话不会二次导入。
+- 8 组数据库迁移测试：新库、原上游和旧内嵌版本升级、用户编辑保留、同名冲突、失败回滚/重试、并发启动/提示词保存。只使用显式本地测试 DSN，并为各用例创建独立数据库。
+- 相关认证、全局工具装配与技能回归测试。
+- Linux amd64 原生可执行文件，静态前端内嵌，CGO 关闭。
 
-The inherited Norma whole-package suite also contains an HTTP-client-nil retry test failure reported by the relay worker. These unrelated upstream failures are not represented as successful validation or silently modified by this fork.
+上述运行未使用生产数据库或真实模型密钥。原生模式不需要 pi SDK、模型中继或 Node Agent 进程。
 
-Release bundles contain the matching pi runtime source and lockfile. Install its dependencies with Node 24 using `npm --prefix runtime/pi ci --omit=dev`. The web updater provides release/source links and rejects binary-only updates or rollback; full bundle installation is required.
+完整 Windows 测试集仍存在上游已知失败，包括证据目录同步权限、技能路径分隔符和部分临时目录清理问题；公司范围测试在未修改的上游也失败。本轮针对修改范围运行验证，不宣称全部上游测试通过。
