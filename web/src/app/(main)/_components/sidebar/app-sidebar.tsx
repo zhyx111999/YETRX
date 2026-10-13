@@ -13,6 +13,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { YeziLogoBadge } from "@/components/yezi-logo";
 import { APP_CONFIG } from "@/config/app-config";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { sidebarItems } from "@/navigation/sidebar/sidebar-items";
@@ -41,10 +42,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild>
+            <SidebarMenuButton size="lg" asChild>
               <Link prefetch={false} href="/function/tasks">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo.png" alt="ARTEX" width={40} height={40} className="shrink-0" />
+                <YeziLogoBadge />
                 <span className="font-semibold text-base">{APP_CONFIG.name}</span>
               </Link>
             </SidebarMenuButton>
