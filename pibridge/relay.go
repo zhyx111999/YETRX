@@ -9,8 +9,12 @@
 // keys never leave the Go process.
 //
 // Semantics worth knowing:
-//   - image_url / audio / file content parts are rejected with 400: llm has no
-//     image block, so accepting them would silently drop the image.
+//   - image_url parts (base64 data URL or http(s) URL) in user and tool messages
+//     become llm image blocks and reach every provider format; the relay never
+//     fetches a URL. Other part types (audio, file) and images in system /
+//     assistant messages are rejected with 400, never silently dropped.
+//   - Anthropic thinking signatures round-trip through Pi's reasoning_details
+//     (see reasoning.go).
 //   - tool_choice supports only "auto" and "none"; reasoning_effort only acts as
 //     an off switch ("none"/"off"); max tokens is clamped to Model.MaxTokens.
 //   - a stream that ends without a stop reason is an error, never a normal end.

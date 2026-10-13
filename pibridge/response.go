@@ -56,10 +56,11 @@ type functionJSON struct {
 }
 
 type delta struct {
-	Role             string         `json:"role,omitempty"`
-	Content          *string        `json:"content,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []toolCallJSON `json:"tool_calls,omitempty"`
+	Role             string            `json:"role,omitempty"`
+	Content          *string           `json:"content,omitempty"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	ReasoningDetails []reasoningDetail `json:"reasoning_details,omitempty"`
+	ToolCalls        []toolCallJSON    `json:"tool_calls,omitempty"`
 }
 
 type chunkChoice struct {
@@ -78,10 +79,11 @@ type chunk struct {
 }
 
 type responseMessage struct {
-	Role             string         `json:"role"`
-	Content          *string        `json:"content"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []toolCallJSON `json:"tool_calls,omitempty"`
+	Role             string            `json:"role"`
+	Content          *string           `json:"content"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	ReasoningDetails []reasoningDetail `json:"reasoning_details,omitempty"`
+	ToolCalls        []toolCallJSON    `json:"tool_calls,omitempty"`
 }
 
 type completionChoice struct {
@@ -217,6 +219,7 @@ type streamEncoder struct {
 	tools        int
 	usage        llm.Usage
 	stop         string // last non-empty stop reason; "" = stream never completed
+	reasoning    reasoningAgg
 }
 
 func (e *streamEncoder) send(d delta, finish *string) {
@@ -245,13 +248,18 @@ func (e *streamEncoder) event(ev llm.StreamEvent) {
 		e.usage.Add(ev.Usage)
 	case llm.SETextDelta:
 		if ev.Text != "" {
+			e.reasoning.endBlock()
 			e.delta(delta{Content: &ev.Text})
 		}
 	case llm.SEThinkingDelta:
 		if ev.Text != "" {
+			e.reasoning.thinking(ev.Text)
 			e.delta(delta{ReasoningContent: ev.Text})
 		}
+	case llm.SEThinkingSignature:
+		e.reasoning.signature(ev.Text) // replay metadata: sent once, in finish
 	case llm.SEToolUseStart:
+		e.reasoning.endBlock()
 		idx := e.tools
 		e.tools++
 		e.delta(delta{ToolCalls: []toolCallJSON{{
@@ -268,7 +276,7 @@ func (e *streamEncoder) event(ev llm.StreamEvent) {
 		}
 		e.usage.Add(ev.Usage)
 	}
-	// SEThinkingSignature / SEMessageStop have no Chat Completions equivalent.
+	// SEMessageStop has no Chat Completions equivalent.
 }
 
 // finish closes a completed stream. A stream with no stop reason was cut short
@@ -279,6 +287,9 @@ func (e *streamEncoder) finish() error {
 		return errTruncated
 	}
 	e.ensureRole() // an empty completion still gets its role chunk
+	if details := e.reasoning.details(); len(details) > 0 {
+		e.delta(delta{ReasoningDetails: details})
+	}
 	reason := finishReason(e.stop, e.tools > 0)
 	e.send(delta{}, &reason)
 	if e.includeUsage {
@@ -317,7 +328,7 @@ func buildCompletion(id, model string, created int64, msg llm.Message, stop stri
 			calls = append(calls, toolCallJSON{ID: toolID(b.ID), Type: "function", Function: &functionJSON{Name: b.Name, Arguments: args}})
 		}
 	}
-	m := responseMessage{Role: "assistant", ReasoningContent: reasoning.String(), ToolCalls: calls}
+	m := responseMessage{Role: "assistant", ReasoningContent: reasoning.String(), ReasoningDetails: messageReasoningDetails(msg), ToolCalls: calls}
 	if s := text.String(); s != "" || len(calls) == 0 {
 		m.Content = &s // null only for a pure tool-call turn
 	}
@@ -344,6 +355,9 @@ func completeEvents(ctx context.Context, p llm.Provider, req llm.CompletionReque
 			switch b.Type {
 			case llm.BlockThinking:
 				evs = append(evs, llm.StreamEvent{Type: llm.SEThinkingDelta, Text: b.Thinking})
+				if b.Signature != "" {
+					evs = append(evs, llm.StreamEvent{Type: llm.SEThinkingSignature, Text: b.Signature})
+				}
 			case llm.BlockText:
 				evs = append(evs, llm.StreamEvent{Type: llm.SETextDelta, Text: b.Text})
 			case llm.BlockToolUse:

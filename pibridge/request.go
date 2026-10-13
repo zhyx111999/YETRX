@@ -62,10 +62,12 @@ type chatMessage struct {
 	ToolCalls  []chatToolCall  `json:"tool_calls"`
 	ToolCallID string          `json:"tool_call_id"`
 	// Pi echoes a previous turn's reasoning back under whichever field the
-	// upstream used when it streamed it.
-	ReasoningContent string `json:"reasoning_content"`
-	Reasoning        string `json:"reasoning"`
-	ReasoningText    string `json:"reasoning_text"`
+	// upstream used when it streamed it; reasoning_details (see reasoning.go)
+	// carries the signed thinking blocks.
+	ReasoningContent string          `json:"reasoning_content"`
+	Reasoning        string          `json:"reasoning"`
+	ReasoningText    string          `json:"reasoning_text"`
+	ReasoningDetails json.RawMessage `json:"reasoning_details"`
 }
 
 type chatToolCall struct {
@@ -124,32 +126,34 @@ func (c *chatRequest) completion(m Model) (llm.CompletionRequest, *apiError) {
 //
 //   - system/developer messages (anywhere) become System segments in order;
 //     llm has no mid-conversation system slot.
-//   - consecutive tool messages become one user message of tool_result blocks.
-//   - assistant reasoning fields become a thinking block (no signature: the
-//     Chat Completions shape cannot carry one back).
+//   - consecutive tool messages become one user message of tool_result blocks;
+//     image parts of a user or tool message become image blocks (a tool
+//     message's land inside its tool_result).
+//   - assistant reasoning becomes thinking blocks: signed ones restored from
+//     reasoning_details, else one unsigned block from the plain reasoning field.
 //   - assistant turns with neither text nor tool calls are dropped, like Pi does.
 func (c *chatRequest) mapMessages(req *llm.CompletionRequest) *apiError {
 	prevTool := false
 	for i, msg := range c.Messages {
 		where := fmt.Sprintf("messages[%d]", i)
-		parts, err := textContent(msg.Content, where+".content")
+		parts, err := parseContent(msg.Content, where+".content", msg.Role == "user" || msg.Role == "tool")
 		if err != nil {
 			return err
 		}
 		isTool := false
 		switch msg.Role {
 		case "system", "developer":
-			if text := strings.Join(parts, "\n"); strings.TrimSpace(text) != "" {
+			if text := strings.Join(texts(parts), "\n"); strings.TrimSpace(text) != "" {
 				req.System = append(req.System, text)
 			}
 		case "user":
-			blocks := textBlocks(parts)
+			blocks := userBlocks(parts)
 			if len(blocks) == 0 {
 				return badRequest("%s: user message has no content", where)
 			}
 			req.Messages = append(req.Messages, llm.Message{Role: llm.RoleUser, Content: blocks})
 		case "assistant":
-			blocks, err := assistantBlocks(msg, parts, where)
+			blocks, err := assistantBlocks(msg, texts(parts), where)
 			if err != nil {
 				return err
 			}
@@ -162,10 +166,7 @@ func (c *chatRequest) mapMessages(req *llm.CompletionRequest) *apiError {
 			if id == "" {
 				return badRequest("%s: tool message requires tool_call_id", where)
 			}
-			block := llm.ContentBlock{Type: llm.BlockToolResult, ToolUseID: id}
-			if text := strings.Join(parts, "\n"); text != "" {
-				block.Content = []llm.ContentBlock{llm.TextBlock(text)}
-			}
+			block := llm.ContentBlock{Type: llm.BlockToolResult, ToolUseID: id, Content: toolResultBlocks(parts)}
 			if prevTool {
 				last := &req.Messages[len(req.Messages)-1]
 				last.Content = append(last.Content, block)
@@ -186,14 +187,13 @@ func (c *chatRequest) mapMessages(req *llm.CompletionRequest) *apiError {
 // assistantBlocks builds the content of an assistant turn: thinking, text, then
 // tool_use. It returns nil (not an error) for a turn with nothing replayable.
 func assistantBlocks(msg chatMessage, parts []string, where string) ([]llm.ContentBlock, *apiError) {
-	var blocks []llm.ContentBlock
-	if r := firstNonEmpty(msg.ReasoningContent, msg.Reasoning, msg.ReasoningText); r != "" {
-		blocks = append(blocks, llm.ContentBlock{Type: llm.BlockThinking, Thinking: r})
-	}
+	blocks := thinkingBlocks(msg)
 	replayable := false
-	for _, b := range textBlocks(parts) {
-		blocks = append(blocks, b)
-		replayable = true
+	for _, text := range parts {
+		if text != "" {
+			blocks = append(blocks, llm.TextBlock(text))
+			replayable = true
+		}
 	}
 	seen := map[string]bool{}
 	for j, tc := range msg.ToolCalls {
@@ -329,61 +329,6 @@ func parseStop(raw json.RawMessage) ([]string, *apiError) {
 		return nil, nil
 	}
 	return out, nil
-}
-
-// textContent flattens an OpenAI content value (null | string | [parts]) into
-// its text parts. Non-text parts are rejected: llm.ContentBlock has no image
-// (or audio/file) block, so accepting image_url would silently drop the image.
-func textContent(raw json.RawMessage, where string) ([]string, *apiError) {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-	switch raw[0] {
-	case '"':
-		var s string
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return nil, badRequest("%s is invalid: %v", where, err)
-		}
-		return []string{s}, nil
-	case '[':
-		var parts []struct {
-			Type string  `json:"type"`
-			Text *string `json:"text"`
-		}
-		if err := json.Unmarshal(raw, &parts); err != nil {
-			return nil, badRequest("%s is invalid: %v", where, err)
-		}
-		out := make([]string, 0, len(parts))
-		for i, p := range parts {
-			switch p.Type {
-			case "text":
-				if p.Text == nil {
-					return nil, badRequest("%s[%d]: text part has no text", where, i)
-				}
-				out = append(out, *p.Text)
-			case "image_url":
-				return nil, badRequest("%s[%d]: image_url input is not supported by this relay (llm.Provider has no image content block)", where, i)
-			default:
-				return nil, badRequest("%s[%d]: unsupported content part type %q", where, i, p.Type)
-			}
-		}
-		return out, nil
-	default:
-		return nil, badRequest("%s must be a string or an array of content parts", where)
-	}
-}
-
-// textBlocks turns non-empty text parts into text blocks (Anthropic rejects
-// empty text blocks).
-func textBlocks(parts []string) []llm.ContentBlock {
-	var blocks []llm.ContentBlock
-	for _, p := range parts {
-		if p != "" {
-			blocks = append(blocks, llm.TextBlock(p))
-		}
-	}
-	return blocks
 }
 
 func firstNonEmpty(ss ...string) string {

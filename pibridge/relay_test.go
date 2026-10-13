@@ -144,9 +144,10 @@ func simpleBody(model string, stream bool, extra string) string {
 type wireChunk struct {
 	Choices []struct {
 		Delta struct {
-			Role             string  `json:"role"`
-			Content          *string `json:"content"`
-			ReasoningContent string  `json:"reasoning_content"`
+			Role             string       `json:"role"`
+			Content          *string      `json:"content"`
+			ReasoningContent string       `json:"reasoning_content"`
+			ReasoningDetails []wireDetail `json:"reasoning_details"`
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -526,7 +527,7 @@ func TestInvalidRequestsAreRejectedBeforeTheProvider(t *testing.T) {
 		{"unknown model", `{"model":"ghost",` + msgs + `}`, 404, "model_not_found"},
 		{"no messages", `{"model":"m","messages":[]}`, 400, "non-empty"},
 		{"only system", `{"model":"m","messages":[{"role":"system","content":"x"}]}`, 400, "at least one"},
-		{"image input", `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`, 400, "image_url"},
+		{"image in assistant message", `{"model":"m","messages":[{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`, 400, "only supported in user and tool"},
 		{"bad role", `{"model":"m","messages":[{"role":"function","content":"x"}]}`, 400, "unsupported role"},
 		{"empty user", `{"model":"m","messages":[{"role":"user","content":""}]}`, 400, "no content"},
 		{"tool without id", `{"model":"m","messages":[{"role":"tool","content":"x"}]}`, 400, "tool_call_id"},
