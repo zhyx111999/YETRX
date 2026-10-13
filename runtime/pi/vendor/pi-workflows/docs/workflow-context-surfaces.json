@@ -1,0 +1,137 @@
+{
+  "formatVersion": 4,
+  "encoding": "utf8",
+  "sources": [
+    "src/subagents-tool.ts",
+    "src/subagents-control-tool.ts",
+    "skills/workflow-authoring",
+    "package.json#pi.skills"
+  ],
+  "surfaces": {
+    "permanentToolPrompt": {
+      "serialization": "UTF-8 bytes of LF-joined Pi prompt lines",
+      "bytes": 165
+    },
+    "providerVisibleToolDefinitions": {
+      "serialization": "sum of UTF-8 bytes of JSON.stringify({ name, description, parameters }) per tool",
+      "bytes": 1951,
+      "tools": [
+        {
+          "name": "subagents",
+          "bytes": 964
+        },
+        {
+          "name": "subagents_control",
+          "bytes": 987
+        }
+      ]
+    },
+    "registeredSkillsDiscovery": {
+      "serialization": "sum of UTF-8 bytes of normalized Pi skill XML (name + description + location) across every root in package.json's pi.skills",
+      "bytes": 1016,
+      "skills": [
+        {
+          "root": "skills/workflow-authoring",
+          "serialization": "UTF-8 bytes of normalized Pi skill XML with package-relative location",
+          "bytes": 335
+        },
+        {
+          "root": "skills/workflow-patterns",
+          "serialization": "UTF-8 bytes of normalized Pi skill XML with package-relative location",
+          "bytes": 305
+        },
+        {
+          "root": "skills/subagents-setup",
+          "serialization": "UTF-8 bytes of normalized Pi skill XML with package-relative location",
+          "bytes": 376
+        }
+      ]
+    },
+    "ordinaryWorkflowOwnedAlwaysOn": {
+      "serialization": "sum of permanent prompt, provider-visible tool definitions, and every registered skill's discovery bytes",
+      "bytes": 3132
+    },
+    "workflowAuthoringSkillCorpus": {
+      "serialization": "sum of UTF-8 bytes for every file under skills/workflow-authoring",
+      "files": 20,
+      "bytes": 56437
+    },
+    "representativeAuthoringProfiles": {
+      "serialization": "sum of UTF-8 bytes for each profile's declared package-relative files",
+      "medianBytes": 16269,
+      "profiles": [
+        {
+          "name": "write",
+          "files": [
+            "skills/workflow-authoring/SKILL.md",
+            "skills/workflow-authoring/references/runtime.md",
+            "skills/workflow-authoring/references/pattern-selection.md",
+            "skills/workflow-authoring/references/focused-recipes.md",
+            "skills/workflow-authoring/examples/fan-out-and-synthesize.js",
+            "skills/workflow-authoring/examples/structured-output.js"
+          ],
+          "bytes": 13343
+        },
+        {
+          "name": "edit",
+          "files": [
+            "skills/workflow-authoring/SKILL.md",
+            "skills/workflow-authoring/references/runtime.md",
+            "skills/workflow-authoring/references/lifecycle.md",
+            "skills/workflow-authoring/references/focused-recipes.md",
+            "skills/workflow-authoring/examples/structured-output.js",
+            "skills/workflow-authoring/examples/bounded-semantic-retry.js"
+          ],
+          "bytes": 16269
+        },
+        {
+          "name": "review",
+          "files": [
+            "skills/workflow-authoring/SKILL.md",
+            "skills/workflow-authoring/references/runtime.md",
+            "skills/workflow-authoring/references/review.md",
+            "skills/workflow-authoring/references/lifecycle.md",
+            "skills/workflow-authoring/examples/classify-and-act.js"
+          ],
+          "bytes": 16863
+        },
+        {
+          "name": "debug",
+          "files": [
+            "skills/workflow-authoring/SKILL.md",
+            "skills/workflow-authoring/references/runtime.md",
+            "skills/workflow-authoring/references/debugging.md",
+            "skills/workflow-authoring/references/checkpoint.md",
+            "skills/workflow-authoring/examples/defensive-json-parsing.js"
+          ],
+          "bytes": 14022
+        },
+        {
+          "name": "loop",
+          "files": [
+            "skills/workflow-authoring/SKILL.md",
+            "skills/workflow-authoring/references/runtime.md",
+            "skills/workflow-authoring/references/pattern-selection.md",
+            "skills/workflow-authoring/references/lifecycle.md",
+            "skills/workflow-authoring/references/focused-recipes.md",
+            "skills/workflow-authoring/examples/loop-until-done.js",
+            "skills/workflow-authoring/examples/structured-output.js"
+          ],
+          "bytes": 18123
+        },
+        {
+          "name": "retry",
+          "files": [
+            "skills/workflow-authoring/SKILL.md",
+            "skills/workflow-authoring/references/runtime.md",
+            "skills/workflow-authoring/references/lifecycle.md",
+            "skills/workflow-authoring/references/focused-recipes.md",
+            "skills/workflow-authoring/examples/bounded-semantic-retry.js",
+            "skills/workflow-authoring/examples/structured-output.js"
+          ],
+          "bytes": 16269
+        }
+      ]
+    }
+  }
+}

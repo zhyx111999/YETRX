@@ -1,0 +1,81 @@
+{
+  "name": "@zhyx111999/pi-workflows-lean",
+  "version": "3.13.0-lean.1",
+  "private": true,
+  "description": "Lean fork of pi-dynamic-workflows 3.13.0. The parent model dispatches subagents; cross-check helpers and foreground runs are removed.",
+  "type": "module",
+  "scripts": {
+    "test": "npm run check && npm run docs:check && npm run context:check && npm run test:unit",
+    "test:unit": "npm run build && tsx --test --import ./tests/helpers/isolated-home.ts tests/**/*.test.ts",
+    "check": "biome check . && npm run check:types",
+    "check:types": "tsc -p tsconfig.check.json",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "build": "tsc",
+    "check:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run build && git --no-pager diff --exit-code -- dist && node -e \"const out=require('node:child_process').execFileSync('git',['ls-files','--others','--exclude-standard','--','dist'],{encoding:'utf8'});if(out){console.error('Build output missing from git:\\n'+out);process.exit(1)}\"",
+    "docs:generate": "tsx scripts/generate-workflow-capabilities.ts",
+    "docs:check": "tsx scripts/generate-workflow-capabilities.ts --check",
+    "context:generate": "tsx scripts/generate-workflow-context-measurement.ts",
+    "context:check": "tsx scripts/generate-workflow-context-measurement.ts --check"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "workflow",
+    "workflows",
+    "dynamic-workflows",
+    "orchestration",
+    "subagents",
+    "multi-agent",
+    "agents",
+    "ai-agents",
+    "parallel",
+    "fan-out",
+    "claude-code",
+    "deep-research",
+    "llm"
+  ],
+  "pi": {
+    "extensions": [
+      "extensions/workflow.ts"
+    ],
+    "skills": [
+      "skills/workflow-authoring",
+      "skills/workflow-patterns",
+      "skills/subagents-setup"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhyx111999/pi-workflows-lean.git"
+  },
+  "homepage": "https://github.com/zhyx111999/pi-workflows-lean#readme",
+  "bugs": {
+    "url": "https://github.com/zhyx111999/pi-workflows-lean/issues"
+  },
+  "author": "zhyx111999",
+  "contributors": [
+    "michaelliv (original author)",
+    "QuintinShaw (pi-dynamic-workflows maintainer)"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "acorn": "^8.16.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.16",
+    "@earendil-works/pi-ai": "^1.1.0",
+    "@earendil-works/pi-coding-agent": "^1.1.0",
+    "@earendil-works/pi-tui": "^1.1.0",
+    "fast-check": "^4.8.0",
+    "tsx": "latest",
+    "typebox": "latest",
+    "typescript": "latest"
+  }
+}

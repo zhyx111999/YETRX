@@ -1,0 +1,27 @@
+# Workflow debugging map
+
+Start from the symptom, then reproduce through the real workflow runtime with deterministic fake agents.
+
+| Symptom | Likely authoring cause | Check |
+| --- | --- | --- |
+| Parser says metadata is missing | `export const meta` is not the first statement or is nonliteral | [runtime](runtime.md#script-envelope) |
+| `parallel()` rejects input | Promises were passed instead of thunks | [runtime](runtime.md#topology) |
+| Synthesis starts early | Fan-out was not awaited as one complete result set | [pattern selection](pattern-selection.md#fan-out-and-synthesize) |
+| Coverage silently disappears | `null` results were filtered before IDs were ledgered | [lifecycle](lifecycle.md#retry-and-recoverable-failure) |
+| Wrong model is used | A higher-priority selector overrides the expected route | [registry ownership](registry-ownership.md#priority) |
+| `unknown agentType` error | A live registry name was guessed or is unavailable | [registry ownership](registry-ownership.md#agent-types) |
+| Later calls rerun on resume | An earlier call missed or changed, ending the replayable prefix | [lifecycle](lifecycle.md#resume) |
+| Resume reruns a call that already "succeeded" once before | Its only prior attempt(s) ended in a recoverable failure (e.g. `AGENT_EMPTY_OUTPUT`) and were never journaled | [lifecycle](lifecycle.md#resume) |
+| A field read off `agent()`'s result is `undefined` | No `schema` was set; the prompt asking for JSON does not change that `agent()` returns raw text | [lifecycle](lifecycle.md#serialization) |
+| Run stays paused at a checkpoint | A checkpoint waits until a controller attaches a response and resumes that exact ID | [checkpoints](checkpoint.md) |
+| Returned result cannot cross boundary | It contains a function, promise, cycle, `BigInt`, or runtime object | [lifecycle](lifecycle.md#serialization) |
+| `Date.now()`/randomness is rejected | Resume requires deterministic call structure | [lifecycle](lifecycle.md#resume) |
+
+## Debugging procedure
+
+1. Reduce to the smallest script that preserves metadata, labels, work IDs, and the failing topology.
+2. Replace provider calls with deterministic, schema-aware fake agents.
+3. Record call order, labels, phases, prompts, results, and `null` entries.
+4. When the failure turns on a disputed signature or default, compare it with the compact [capability index](capabilities.md); follow its exhaustive-facts pointer only when needed.
+5. Separate runtime defects from unsupported authoring assumptions and compatibility-only behavior.
+6. Fix only the demonstrated authoring issue; do not rely on known out-of-scope gaps in resume accounting, checkpoint forms/timeouts, or metadata validation.
