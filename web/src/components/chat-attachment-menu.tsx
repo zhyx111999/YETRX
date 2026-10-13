@@ -20,6 +20,7 @@ export function ChatAttachmentMenu({
   const [open, setOpen] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const imageInputRef = React.useRef<HTMLInputElement>(null);
+  // biome-ignore lint/nursery/useNullishCoalescing: Each boolean flag must disable the picker independently.
   const unavailable = disabled || uploading;
   const isOpen = open && !unavailable;
 

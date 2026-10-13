@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner";
 
 import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
+import { ChatAttachmentMenu } from "@/components/chat-attachment-menu";
 import { MentionTextarea } from "@/components/mention-textarea";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
@@ -51,6 +52,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { api, sseUrl } from "@/lib/api";
+import { filesFromClipboard } from "@/lib/chat-attachments";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { MOCK } from "@/lib/mock/enabled";
 import { isBtwCommand } from "@/lib/side-questions";
@@ -544,19 +546,16 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   // 方式1 文件上传:选好的附件(已落到任务工作目录 uploads/),随下条消息一起发。
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-
-  async function pickFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
+  async function pickFiles(files: File[]) {
+    if (files.length === 0 || uploading || mainBusy) return;
     setUploading(true);
     try {
-      const r = await api.chatUpload("task", taskId, Array.from(files));
+      const r = await api.chatUpload("task", taskId, files);
       setAttachments((prev) => [...prev, ...r.attachments]);
     } catch (e) {
       toast.error(`上传失败：${(e as Error).message}`);
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -1495,7 +1494,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
     const text = input.trim();
     const atts = attachments;
     if (side.handleCommand(text, () => setInput(""))) return;
-    if ((!text && atts.length === 0) || sending || mainBusy) return;
+    if ((!text && atts.length === 0) || sending || mainBusy || uploading) return;
     // No optimistic echo: the backend persists+broadcasts the human turn before it
     // returns, so it streams back over SSE (worker="mainagent") with its real DB
     // seq — the transcript renders it from server data like every other step. Clear
@@ -1933,13 +1932,6 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                     ))}
                   </div>
                 )}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => void pickFiles(e.target.files)}
-                />
                 <InputGroup className="min-h-9 has-disabled:opacity-100">
                   <MentionTextarea
                     inputGroup
@@ -1951,6 +1943,16 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                     value={input}
                     disabled={sending}
                     onValueChange={setInput}
+                    onPaste={(event) => {
+                      const files = filesFromClipboard(event.clipboardData);
+                      if (files.length === 0) return;
+                      event.preventDefault();
+                      if (mainBusy || uploading) {
+                        toast.info(uploading ? "附件正在上传，请稍后再粘贴" : "请等待当前操作结束后再添加附件");
+                        return;
+                      }
+                      void pickFiles(files);
+                    }}
                     onKeyDown={(e) => {
                       if (!shouldSubmitOnKey(e, sendMode)) return;
                       e.preventDefault();
@@ -1959,16 +1961,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                     className="max-h-36 min-h-9 overflow-y-auto"
                   />
                   <InputGroupAddon align="block-end">
-                    <InputGroupButton
-                      size="icon-xs"
-                      variant="ghost"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={mainBusy || uploading}
-                      title="上传文件"
-                      aria-label="上传文件"
-                    >
-                      {uploading ? <Loader2Icon className="animate-spin" /> : <PaperclipIcon />}
-                    </InputGroupButton>
+                    <ChatAttachmentMenu disabled={mainBusy} uploading={uploading} onPickFiles={pickFiles} />
                     {mainBusy && isBtwCommand(input) && (
                       <InputGroupButton size="icon-xs" onClick={send} aria-label="发送旁路问题">
                         <ArrowUpIcon />
@@ -1992,7 +1985,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                         size="icon-xs"
                         variant="default"
                         onClick={send}
-                        disabled={(!input.trim() && attachments.length === 0) || sending}
+                        disabled={(!input.trim() && attachments.length === 0) || sending || uploading}
                         title="发送消息"
                         aria-label="发送消息"
                       >

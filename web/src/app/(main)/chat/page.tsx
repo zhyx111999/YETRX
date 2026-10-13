@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ChatAttachmentMenu } from "@/components/chat-attachment-menu";
 import { MentionTextarea } from "@/components/mention-textarea";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
@@ -55,6 +56,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
+import { filesFromClipboard } from "@/lib/chat-attachments";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { isBtwCommand } from "@/lib/side-questions";
@@ -169,14 +171,13 @@ function Composer({
   running?: boolean;
   onStop?: () => void;
   stopDisabled?: boolean;
-  // 方式1 文件上传:传了 onPickFiles 才显示回形针按钮 + 附件 chip 预览。
+  // Shared file/image picker and attachment previews for every chat mode.
   attachments?: ChatAttachment[];
   onPickFiles?: (files: File[]) => void;
   onRemoveAttachment?: (path: string) => void;
   uploading?: boolean;
   allowBtw?: boolean;
 }) {
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const atts = attachments ?? [];
   // 发送键位由系统设置决定（localStorage），默认 Enter 发送。
   const sendMode = useChatSendMode();
@@ -184,6 +185,17 @@ function Composer({
     if (!shouldSubmitOnKey(e, sendMode)) return;
     e.preventDefault();
     onSend();
+  }
+  function onPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!onPickFiles) return;
+    const files = filesFromClipboard(event.clipboardData);
+    if (files.length === 0) return; // ordinary text keeps native paste/undo/caret behavior
+    event.preventDefault();
+    if (disabled || uploading) {
+      toast.info(uploading ? "附件正在上传，请稍后再粘贴" : "请等待当前操作结束后再添加附件");
+      return;
+    }
+    onPickFiles(files);
   }
   return (
     <div className="border-t p-3">
@@ -215,30 +227,7 @@ function Composer({
       <div className="flex flex-wrap items-center gap-2">
         {leftSlot ? <div className="w-full sm:w-auto">{leftSlot}</div> : null}
         {onPickFiles && (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                // FileList 与 input 元素活绑定:必须先快照成数组,再清空 value,
-                // 否则异步的 onPickFiles(比如草稿态要先建会话)恢复执行时会拿到空列表。
-                const picked = Array.from(e.target.files ?? []);
-                e.target.value = ""; // allow re-picking the same file
-                if (picked.length > 0) onPickFiles(picked);
-              }}
-            />
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || uploading}
-              title="上传文件"
-            >
-              {uploading ? <Loader2Icon className="size-4 animate-spin" /> : <PaperclipIcon className="size-4" />}
-            </Button>
-          </>
+          <ChatAttachmentMenu disabled={disabled} uploading={uploading} onPickFiles={onPickFiles} />
         )}
         <MentionTextarea
           className="max-h-40 min-h-10 min-w-0 flex-1 resize-none"
@@ -248,6 +237,7 @@ function Composer({
           disabled={disabled && !(running && allowBtw)}
           onValueChange={onChange}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
         {running && allowBtw && isBtwCommand(value) && (
           <Button size="icon" onClick={onSend} aria-label="发送旁路问题" title="发送旁路问题">
@@ -264,7 +254,7 @@ function Composer({
           <Button
             size="icon"
             onClick={onSend}
-            disabled={disabled || (!value.trim() && atts.length === 0)}
+            disabled={disabled || uploading || (!value.trim() && atts.length === 0)}
             title="发送消息"
             aria-label="发送消息"
           >
@@ -379,7 +369,7 @@ function DraftChat({
   const [sending, setSending] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
 
-  // default the agent to Auto once agents load.
+  // Default to Agent once modes load.
   React.useEffect(() => {
     if (!agentKey && agents.some((a) => a.key === "agent")) setAgentKey("agent");
   }, [agentKey, agents]);
@@ -388,7 +378,7 @@ function DraftChat({
 
   async function send() {
     const msg = input.trim();
-    if (!msg || !agentKey || sending) return;
+    if (!msg || !agentKey || sending || uploading) return;
     setSending(true);
     try {
       const c = await api.createConversation(agentKey, "", llmProfileId);
@@ -489,7 +479,7 @@ function ChatView({
   agents: Agent[];
   profiles: LLMProfile[];
   // pending text + already-uploaded attachments handed off from a draft that
-  // created this conversation via the paperclip (consumed once, on mount).
+  // created this conversation through an attachment picker or paste (consumed once, on mount).
   initial?: { input?: string; attachments?: ChatAttachment[] };
   onTitleMaybeChanged: () => void;
   onConvUpdated: () => void;
@@ -710,7 +700,7 @@ function ChatView({
   // pickFiles uploads into this conversation's session dir (sessions/conv-<id>/
   // uploads/) and queues the returned metadata to send with the next message.
   async function pickFiles(files: File[]) {
-    if (files.length === 0) return;
+    if (files.length === 0 || uploading || sending || running) return;
     setUploading(true);
     try {
       const r = await api.chatUpload("session", `conv-${conv.id}`, files);
@@ -726,7 +716,7 @@ function ChatView({
     const msg = input.trim();
     const atts = attachments;
     if (side.handleCommand(msg, () => setInput(""))) return;
-    if ((!msg && atts.length === 0) || sending || running) return;
+    if ((!msg && atts.length === 0) || sending || running || uploading) return;
     setSending(true);
     setInput("");
     setAttachments([]);
@@ -1074,7 +1064,7 @@ export default function ChatPage() {
   // useState init) so the server and client render the same first pass.
   const [collapsedAgents, setCollapsedAgents] = React.useState<Set<string>>(() => new Set());
   // Pending text + uploaded attachments handed off from a draft that created a
-  // conversation via the paperclip, keyed by the new conversation id (consumed once
+  // conversation through an attachment upload, keyed by the new conversation id (consumed once
   // by ChatView on mount; ids never repeat, so leftover entries are harmless).
   const [pendingByConv, setPendingByConv] = React.useState<
     Record<number, { input?: string; attachments?: ChatAttachment[] }>
