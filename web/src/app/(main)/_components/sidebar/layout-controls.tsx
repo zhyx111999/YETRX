@@ -99,11 +99,18 @@ export function LayoutControls() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button size="icon" aria-label="界面设置">
+        <Button
+          size="icon"
+          aria-label="界面设置"
+          className="transition-transform duration-300 ease-out active:scale-90 motion-reduce:transition-none"
+        >
           <Settings className="transition-transform duration-300 ease-out group-data-[state=open]/button:rotate-90 motion-reduce:transition-none" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end">
+      <PopoverContent
+        align="end"
+        className="duration-300 ease-out motion-reduce:data-open:animate-none motion-reduce:data-closed:animate-none"
+      >
         <div className="flex flex-col gap-5">
           <div className="space-y-1.5">
             <h4 className="font-medium text-sm leading-none">Preferences</h4>
@@ -156,6 +163,7 @@ export function LayoutControls() {
             <div className="space-y-1">
               <Label className="font-medium text-xs">Theme Mode</Label>
               <ToggleGroup
+                className="animate-in fade-in-0 zoom-in-95 duration-300 motion-reduce:animate-none"
                 size="sm"
                 spacing={0}
                 variant="outline"
@@ -163,13 +171,25 @@ export function LayoutControls() {
                 value={themeMode}
                 onValueChange={onThemeModeChange}
               >
-                <ToggleGroupItem value="light" aria-label="Toggle light">
+                <ToggleGroupItem
+                  value="light"
+                  className="transition-transform duration-200 active:scale-95 motion-reduce:transition-none"
+                  aria-label="Toggle light"
+                >
                   Light
                 </ToggleGroupItem>
-                <ToggleGroupItem value="dark" aria-label="Toggle dark">
+                <ToggleGroupItem
+                  value="dark"
+                  className="transition-transform duration-200 active:scale-95 motion-reduce:transition-none"
+                  aria-label="Toggle dark"
+                >
                   Dark
                 </ToggleGroupItem>
-                <ToggleGroupItem value="system" aria-label="Toggle system">
+                <ToggleGroupItem
+                  value="system"
+                  className="transition-transform duration-200 active:scale-95 motion-reduce:transition-none"
+                  aria-label="Toggle system"
+                >
                   System
                 </ToggleGroupItem>
               </ToggleGroup>
