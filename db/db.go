@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/artex/minimalprompt"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver ("pgx")
 )
@@ -186,7 +187,7 @@ type promptVar struct{ name, desc, example, source string }
 func intp(v int) *int { return &v }
 
 // builtinAgents mirrors docs §5(a). 内置工具不入库；这里只 seed agent + 变量目录。
-// 注：planner/worker/mainagent/auto 的交互式 shell 默认由下方 interactive_shell_default_v1
+// 注：planner/worker/mainagent 的交互式 shell 默认由下方 interactive_shell_default_v1
 // 块统一置 true（尊重后续 toggle）；这里的 interactiveShell 只给需要「建行即默认开」的新 agent。
 var builtinAgents = []builtinAgent{
 	{"goals", "目标拆解", "goals", "把渗透任务目标拆解成若干独立、可验证的子目标。", []promptVar{
@@ -207,15 +208,21 @@ var builtinAgents = []builtinAgent{
 		{"ProxyAddr", "记录代理地址(驱动 if 双文案)", "127.0.0.1:8080", "runtime"},
 		{"WorkerName", "worker 自我标识(可选)", "worker-1", "runtime"},
 	}, false, nil},
-	// Auto:内置「平台操作」agent。不参与渗透编排循环,经对话页驱动,用工具操作平台。
-	{"auto", "Auto", "assistant", "平台操作助手：用工具管理任务(建/看/暂停/给提示)与资产，并可创建/修改 skill、自定义工具、MCP。", nil, false, nil},
+	// Agent uses the native conversational runner and the shared resource catalog.
+	{minimalprompt.AgentKey, minimalprompt.AgentName, "assistant", minimalprompt.AgentDescription, nil, false, intp(0)},
 	// 渗透测试:内置「独立渗透」agent。经对话页驱动,一人从侦察到收尾走完整条渗透链,自己规划自己执行自己验证。默认开启交互式 shell。
 	{"pentest", "渗透测试", "assistant", "独立渗透 agent：一人从侦察→找攻击面→深入利用→验证→收尾走完整条链，自己规划、自己执行、自己对抗式验证。", nil, true, intp(0)},
 }
 
 // seedBuiltins inserts the fixed built-in agents and their variable catalog (idempotent).
 func (d *DB) seedBuiltins() error {
+	if err := d.migrateDefaultAgent(); err != nil {
+		return fmt.Errorf("migrate native Agent: %w", err)
+	}
 	for _, a := range builtinAgents {
+		if a.key == minimalprompt.AgentKey {
+			continue // The one-time migration owns this row; preserve later user edits.
+		}
 		var agentID int64
 		err := d.QueryRow(`
 INSERT INTO agents(key, name, description, role, builtin, enabled, interactive_shell, run_seconds)
@@ -240,14 +247,16 @@ ON CONFLICT (agent_id, var_name) DO UPDATE
 	// longer advertises a name templates can't resolve (EngagementTitle→Description).
 	// 'Now' 从各 agent 目录提升为全局 runtime 变量后,旧库里 goals 仍残留一条 'Now'
 	// 会与全局项撞名(前端变量列表 key 重复);一并清掉。
-	if _, err := d.Exec(`DELETE FROM agent_prompt_vars WHERE var_name IN ('EngagementTitle', 'CoverageGaps', 'Now')`); err != nil {
+	// Keep Agent's migrated variable catalog intact.
+	if _, err := d.Exec(`DELETE FROM agent_prompt_vars WHERE var_name IN ('EngagementTitle', 'CoverageGaps', 'Now')
+AND agent_id <> (SELECT id FROM agents WHERE key='agent')`); err != nil {
 		return fmt.Errorf("cleanup renamed vars: %w", err)
 	}
-	// Default-on interactive_shell for the runtime agents (planner/worker/mainagent/auto)
+	// Default-on interactive_shell for the runtime agents (planner/worker/mainagent)
 	// ONCE — respects a later user toggle-off (guarded by a settings flag). goals(one-shot
 	// decomposer) stays off. Runs after the column exists (schema applied before seed).
 	if v, _, _ := d.GetSetting("interactive_shell_default_v1"); v != "true" {
-		if _, err := d.Exec(`UPDATE agents SET interactive_shell=true WHERE key IN ('planner','worker','mainagent','auto')`); err != nil {
+		if _, err := d.Exec(`UPDATE agents SET interactive_shell=true WHERE key IN ('planner','worker','mainagent')`); err != nil {
 			return fmt.Errorf("seed interactive_shell defaults: %w", err)
 		}
 		_ = d.SetSetting("interactive_shell_default_v1", "true")
@@ -322,7 +331,7 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 // declares `mcps: ScopeSentry`, which only takes effect once it's made visible and
 // that MCP is enabled/configured.
 var builtinSkillVisibility = map[string][]string{
-	"api-recon": {"auto", "pentest", "worker"},
+	"api-recon": {"pentest", "worker"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default
