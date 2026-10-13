@@ -62,7 +62,7 @@ export function ChatAttachmentMenu({
               <PlusIcon
                 aria-hidden="true"
                 className={cn(
-                  "size-5 transition-transform duration-[225ms] ease-out motion-reduce:transition-none",
+                  "size-5 transition-transform duration-[450ms] ease-out motion-reduce:transition-none",
                   isOpen && "rotate-90",
                 )}
               />
@@ -75,7 +75,7 @@ export function ChatAttachmentMenu({
           sideOffset={8}
           collisionPadding={12}
           aria-label="选择附件类型"
-          className="max-h-(--radix-popover-content-available-height) w-64 max-w-[calc(100vw-1.5rem)] gap-2 overflow-y-auto p-2 data-open:[animation-delay:225ms] data-open:[animation-fill-mode:both] motion-reduce:data-open:animate-none motion-reduce:data-closed:animate-none"
+          className="max-h-(--radix-popover-content-available-height) w-64 max-w-[calc(100vw-1.5rem)] gap-2 overflow-y-auto p-2 data-open:[animation-delay:450ms] data-open:[animation-fill-mode:both] motion-reduce:data-open:animate-none motion-reduce:data-closed:animate-none"
         >
           <p className="px-1 text-xs text-muted-foreground">选择附件类型</p>
           <Button
