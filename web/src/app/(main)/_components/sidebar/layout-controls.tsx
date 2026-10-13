@@ -99,8 +99,8 @@ export function LayoutControls() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button size="icon">
-          <Settings />
+        <Button size="icon" aria-label="界面设置">
+          <Settings className="transition-transform duration-300 ease-out group-data-[state=open]/button:rotate-90 motion-reduce:transition-none" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end">
