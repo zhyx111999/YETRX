@@ -379,9 +379,9 @@ function DraftChat({
   const [sending, setSending] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
 
-  // default the agent to Auto once agents load.
+  // Default to Agent once the available modes load.
   React.useEffect(() => {
-    if (!agentKey && agents.some((a) => a.key === "auto")) setAgentKey("auto");
+    if (!agentKey && agents.some((a) => a.key === "agent" && a.enabled)) setAgentKey("agent");
   }, [agentKey, agents]);
 
   const agent = agents.find((a) => a.key === agentKey);
@@ -1198,9 +1198,12 @@ export default function ChatPage() {
     [visibleConversations, agentByKey],
   );
   // conversation agents: custom agents + conversational built-ins (role=assistant,
-  // e.g. Auto / 渗透测试). The orchestration built-ins (goals/planner/mainagent/worker)
+  // e.g. Agent / 渗透测试). The orchestration built-ins (goals/planner/mainagent/worker)
   // are task-specific and stay hidden from the chat page.
-  const chatAgents = React.useMemo(() => agents.filter((a) => !a.builtin || a.role === "assistant"), [agents]);
+  const chatAgents = React.useMemo(
+    () => agents.filter((a) => !a.builtin || (a.role === "assistant" && a.key !== "auto")),
+    [agents],
+  );
   const agentFilterOptions = React.useMemo(() => {
     const counts = new Map<string, number>();
     for (const conversation of convs) {
