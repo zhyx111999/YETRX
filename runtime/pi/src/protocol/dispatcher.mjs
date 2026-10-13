@@ -1,5 +1,5 @@
 import { errorText, log, registerSecret } from "../diagnostics.mjs";
-import { parseInit, parseModelSelection, parseThinkingLevel } from "./init-config.mjs";
+import { parseInit, parseModelSelection, parseSystemPrompt, parseThinkingLevel } from "./init-config.mjs";
 
 const STREAMING_BEHAVIORS = ["steer", "followUp"];
 
@@ -11,7 +11,7 @@ function parsePrompt(command) {
   if (!STREAMING_BEHAVIORS.includes(streamingBehavior)) {
     throw new Error(`streamingBehavior must be one of ${STREAMING_BEHAVIORS.join(", ")}`);
   }
-  return { message: command.message, streamingBehavior };
+  return { message: command.message, streamingBehavior, systemPrompt: parseSystemPrompt(command) };
 }
 
 function parseSetModel(command) {

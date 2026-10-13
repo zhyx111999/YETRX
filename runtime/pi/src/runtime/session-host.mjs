@@ -58,8 +58,13 @@ export class SessionHost {
    * Run one prompt to completion. While a run is already streaming (a background result
    * started one, say) the message is queued behind it instead of being rejected.
    */
-  async prompt({ message, streamingBehavior }) {
-    const { session } = await this.#current();
+  async prompt({ message, streamingBehavior, systemPrompt }) {
+    const { session, hostPrompt } = await this.#current();
+    if (systemPrompt !== undefined) {
+      // SDK queued inputs skip before_agent_start, so apply host configuration at a fresh run boundary.
+      await session.waitForIdle();
+      hostPrompt.set(systemPrompt);
+    }
     let disposition;
     await session.prompt(message, {
       expandPromptTemplates: false,

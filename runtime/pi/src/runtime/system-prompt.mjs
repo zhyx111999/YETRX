@@ -12,9 +12,9 @@ const TOOL_LINES = {
 };
 
 /**
- * The only system prompt the agent gets: a short statement of the environment and a
- * one-line description of each tool. Pi appends the working directory, project
- * context files and the skill list after it; nothing else is added.
+ * The default prompt: a short statement of the environment and a one-line description
+ * of each tool. Pi appends the working directory, project context files and the skill
+ * list after it; nothing else is added.
  *
  * @param {string[]} extraTools optional built-ins enabled for this session
  */
@@ -28,4 +28,27 @@ export function buildSystemPrompt(extraTools = []) {
     "",
     "Skills listed below are loaded on demand: read a skill's SKILL.md when its description matches the task.",
   ].join("\n");
+}
+
+/** Keep the host's latest prompt for both human turns and automatic background delivery. */
+export function createHostPrompt(initialPrompt = "", extraTools = []) {
+  const fallback = buildSystemPrompt(extraTools);
+  const normalize = (value) => (value.trim() ? value : fallback);
+  let current = normalize(initialPrompt);
+
+  /** @type {import("@earendil-works/pi-coding-agent").ExtensionFactory} */
+  const extension = (pi) => {
+    pi.on("before_agent_start", (event) => {
+      // Only replace the prefix; SDK context, skills, tools and other extension edits survive.
+      event.systemPromptOptions.customPrompt = current;
+    });
+  };
+
+  return {
+    extension,
+    get: () => current,
+    set: (value) => {
+      current = normalize(value);
+    },
+  };
 }

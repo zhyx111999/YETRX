@@ -123,6 +123,72 @@ describe("a prompt", () => {
     );
   });
 
+  it("applies the latest host systemPrompt in one live session while preserving resources and history", async () => {
+    const initial = "HOST_PROMPT_INITIAL: initial instructions.";
+    const first = "HOST_PROMPT_FIRST: first instructions.";
+    const second = "HOST_PROMPT_SECOND: replacement instructions.";
+    await withBridge(
+      {
+        script: reply("noted"),
+        init: { systemPrompt: initial, tools: ["grep", "find", "ls"] },
+        prepare: (ws) => {
+          writeFileSync(join(ws.agentDir, "SYSTEM.md"), "PRIVATE_SYSTEM_CANARY");
+          writeFileSync(join(ws.agentDir, "APPEND_SYSTEM.md"), "PRIVATE_APPEND_CANARY");
+          writeFileSync(join(ws.cwd, "AGENTS.md"), "PROJECT_CONTEXT_CANARY");
+        },
+      },
+      async ({ bridge, fake, ws, ready }) => {
+        const tools = ["read", "bash", "edit", "write", "grep", "find", "ls", "subagents", "subagents_control"];
+        assert.deepEqual([...ready.tools].sort(), [...tools].sort());
+        const check = (expected, absent = []) => {
+          const request = fake.requests.at(-1);
+          const system = textFor(request, "system");
+          assert.ok(system.includes(expected), "the relay receives the latest host prompt");
+          assert.ok(system.includes(ws.cwd.replace(/\\/g, "/")), "cwd survives");
+          assert.match(system, /PROJECT_CONTEXT_CANARY/);
+          for (const name of ["workflow-authoring", "workflow-patterns", "subagents-setup"]) {
+            assert.ok(system.includes(name), `skill metadata survives: ${name}`);
+          }
+          assert.deepEqual(request.body.tools.map((tool) => tool.function.name).sort(), [...tools].sort());
+          const allMessages = JSON.stringify(request.body.messages);
+          for (const text of [...absent, "PRIVATE_SYSTEM_CANARY", "PRIVATE_APPEND_CANARY"]) {
+            assert.ok(!allMessages.includes(text), `must not inject ${text}`);
+          }
+          assert.match(allMessages, /多代理模式已启动/, "the workflow parent hook still runs");
+        };
+
+        assert.equal((await prompt(bridge, "initial", "remember this turn")).response.ok, true);
+        check(initial);
+        for (const [id, systemPrompt, absent] of [["p1", first, [initial]], ["p2", second, [initial, first]]]) {
+          assert.equal((await bridge.request({ id, type: "prompt", message: id, systemPrompt })).ok, true);
+          check(systemPrompt, absent);
+        }
+        assert.equal(fake.requests.length, 3);
+        assert.match(textFor(fake.requests.at(-1), "user"), /remember this turn/, "history survives the updates");
+        assert.match(textFor(fake.requests.at(-1), "assistant"), /noted/);
+
+        for (const systemPrompt of [null, false, 123, [], {}]) {
+          const invalidInit = await bridge.request(initCommand(ws, fake.baseUrl, { id: "invalid-init", systemPrompt }));
+          assert.equal(invalidInit.ok, false);
+          assert.equal(invalidInit.error, "systemPrompt must be a string");
+          const invalidPrompt = await bridge.request({ id: "invalid-prompt", type: "prompt", message: "invalid", systemPrompt });
+          assert.equal(invalidPrompt.ok, false);
+          assert.equal(invalidPrompt.error, "systemPrompt must be a string");
+        }
+        assert.equal(fake.requests.length, 3, "invalid values never reach the model or replace the session");
+        assert.equal((await prompt(bridge, "omitted", "keep current instructions")).response.ok, true);
+        check(second, [initial, first]);
+
+        assert.equal((await bridge.request({ id: "empty", type: "prompt", message: "use default instructions", systemPrompt: "" })).ok, true);
+        check("read: read a file", [initial, first, second, "expert coding assistant", "Pi documentation"]);
+        assert.match(textFor(fake.requests.at(-1), "system"), /ls: list a directory/);
+        assert.match(textFor(fake.requests.at(-1), "user"), /remember this turn/);
+        assert.equal(bridge.records.filter((record) => record.type === "ready").length, 1);
+        assert.equal(bridge.events("extension_error").length, 0);
+      },
+    );
+  });
+
   it("injects the workflow extension's hidden parent note after the typed message", async () => {
     await withBridge({ script: reply("ok") }, async ({ bridge, fake }) => {
       const { records } = await prompt(bridge, "p1", "refactor this");

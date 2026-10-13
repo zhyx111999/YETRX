@@ -28,7 +28,7 @@ function toProviderModel(model) {
     id: model.id,
     name: model.name,
     reasoning: true,
-    input: ["text"],
+    input: ["text", "image"],
     cost: FREE,
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,

@@ -19,8 +19,8 @@ Every command is answered exactly once and the answer carries the command's `id`
 
 | command | fields | answer |
 |---|---|---|
-| `init` | `id, cwd, agentDir, sessionFile, baseUrl, apiKey, models:[{id,name,contextWindow,maxTokens}], modelId, thinkingLevel, history?, tools?, trustProject?` | `{type:"ready",id,tools,skills,modelId}` or `{type:"response",id,ok:false,error}` |
-| `prompt` | `id, message, streamingBehavior?` | `{type:"response",id,ok}` when the run has finished |
+| `init` | `id, cwd, agentDir, sessionFile, baseUrl, apiKey, models:[{id,name,contextWindow,maxTokens}], modelId, thinkingLevel, history?, tools?, trustProject?, systemPrompt?` | `{type:"ready",id,tools,skills,modelId}` or `{type:"response",id,ok:false,error}` |
+| `prompt` | `id, message, streamingBehavior?, systemPrompt?` | `{type:"response",id,ok}` when the run has finished |
 | `abort` | `id` | `{type:"response",id,ok}` once the run is idle |
 | `set_model` | `id, modelId, thinkingLevel?` | `{type:"response",id,ok}` |
 | `set_models` | `id, models, modelId, thinkingLevel?` | `{type:"response",id,ok}` |
@@ -36,6 +36,15 @@ same way as `shutdown`.
   `ok:true` otherwise, including an aborted run. If a run is already streaming (for example one a
   background result started) the message is queued behind it (`streamingBehavior`: `followUp`
   default, or `steer`). Input is never expanded as a prompt template or slash command.
+* `init.systemPrompt` sets the initial host prompt; `prompt.systemPrompt` updates it before that
+  prompt. Omission keeps the current value (the built-in concise prompt on init); a present value
+  must be a string, and empty/whitespace-only text restores the built-in prompt. The host should
+  send its current DB prompt each human turn. A public inline `before_agent_start` extension edits
+  only `systemPromptOptions.customPrompt`, preserving skills, cwd, project context and other
+  extension processing. A prompt carrying this field waits for `AgentSession.waitForIdle()` before
+  starting a fresh run, since SDK streaming queues skip `before_agent_start`; its response follows
+  completion even if `streamingBehavior` was supplied. Background result turns after that prompt
+  use the latest value; updates keep the live session and workflows running without reloading resources.
 * `set_models` re-declares the `yetrx` provider's model list in place. The session, its history and
   every background workflow keep running; `modelId` must be in the new list. See *Limits*.
 * A second `init` ends the live session (extensions get `session_shutdown`, background runs are
@@ -62,14 +71,15 @@ Bridge-originated events (RPC-mode shapes): `extension_ui_request` (`notify`, `s
 
 * Real SDK objects only: `createAgentSession`, `SessionManager.open(sessionFile)`, a file-backed
   `SettingsManager` in `agentDir`, `DefaultResourceLoader`, `bindExtensions`.
-* Provider `yetrx` (`openai-completions`) on an in-memory `ModelRuntime`; model ids are sent as-is;
-  the token is a runtime credential and is never written to disk, a session or a log.
+* Provider `yetrx` (`openai-completions`, text and image input) on an in-memory `ModelRuntime`;
+  model ids are sent as-is; the token is a runtime credential and is never written to disk, a
+  session or a log.
 * Tools: `read bash edit write` plus the workflow extension's `subagents`, `subagents_control`;
   `init.tools` may add `grep find ls`.
-* Extension: `vendor/pi-workflows` (pi-workflows-lean, see `vendor/VENDOR.md`) and its three skills.
-  No other extension, no web-search extension, no Tavily.
-* System prompt: one short built-in text plus pi's cwd / context-file / skill sections. `SYSTEM.md`,
-  `APPEND_SYSTEM.md`, prompt templates, themes and `~/.agents/skills` are not read.
+* Extensions: `vendor/pi-workflows` (pi-workflows-lean, see `vendor/VENDOR.md`) with its three skills,
+  plus the inline host prompt hook. No web-search extension or Tavily.
+* System prompt: the host's text (or the short built-in default) plus pi's cwd / context-file / skill
+  sections. `SYSTEM.md`, `APPEND_SYSTEM.md`, prompt templates, themes and `~/.agents/skills` are not read.
 * Workspace trust: `<cwd>/.pi` extensions, settings and skills are **not** loaded unless
   `init.trustProject` is `true`. `AGENTS.md`/`CLAUDE.md` context files always load.
 * Subagents inherit the main model: the bridge records it as the agent directory's default model.

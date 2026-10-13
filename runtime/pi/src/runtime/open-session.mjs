@@ -10,7 +10,7 @@ import { persistModelDefaults } from "./model-defaults.mjs";
 import { createRelayModelRuntime } from "./relay-model-runtime.mjs";
 import { createResourceLoader } from "./resource-loader.mjs";
 import { prepareSessionDirectory, restrictSessionFile } from "./session-storage.mjs";
-import { buildSystemPrompt } from "./system-prompt.mjs";
+import { createHostPrompt } from "./system-prompt.mjs";
 
 /** Refuse to run without the workflow extension: a session without it is not the product. */
 function assertWorkflowExtension(loader, session) {
@@ -69,11 +69,12 @@ export async function openSession(config, emit) {
   await persistModelDefaults(settingsManager, config.modelId, config.thinkingLevel);
 
   const modelRuntime = await createRelayModelRuntime(config);
+  const hostPrompt = createHostPrompt(config.systemPrompt, config.tools);
   const loader = await createResourceLoader({
     cwd: config.cwd,
     agentDir: config.agentDir,
     settingsManager,
-    systemPrompt: buildSystemPrompt(config.tools),
+    hostPrompt,
   });
 
   const { session } = await createAgentSession({
@@ -127,6 +128,7 @@ export async function openSession(config, emit) {
 
   return {
     session,
+    hostPrompt,
     modelRuntime,
     settingsManager,
     baseUrl: config.baseUrl,

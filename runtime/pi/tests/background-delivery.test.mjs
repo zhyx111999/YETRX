@@ -69,9 +69,13 @@ describe("the built-in deep-research workflow", () => {
 });
 
 describe("background workflow results", () => {
-  it("come back into the parent session after the prompt was answered, with no new command", async () => {
+  it("survive model and prompt updates and return automatically with the latest configuration", async () => {
+    const childReply = Promise.withResolvers();
     await withBridge(
-      { script: delegatingRelay({ childReply: { delayMs: 1500, text: "child says hello" } }) },
+      {
+        script: delegatingRelay({ childReply: childReply.promise }),
+        init: { systemPrompt: "BACKGROUND_HOST_PROMPT_OLD" },
+      },
       async ({ bridge, fake }) => {
         assert.equal((await bridge.request({ id: "m1", type: "set_model", modelId: "profile-2" })).ok, true);
         const { response } = await prompt(bridge, "p1", "please delegate this");
@@ -83,13 +87,19 @@ describe("background workflow results", () => {
         assert.equal(child.body.model, "profile-2", "a subagent without its own model uses the main model");
         assert.ok(!child.body.tools.some((tool) => tool.function.name === "subagents"), "subagents cannot spawn subagents");
 
-        // The model list changes while the run is in flight; nothing about the run may break.
+        // Change both configurations while the child is held at the relay; the run must survive.
         const models = [
           { id: "profile-2", name: "Profile 2", contextWindow: 64000, maxTokens: 4096 },
           { id: "profile-4", name: "Profile 4", contextWindow: 100000, maxTokens: 8000 },
         ];
         const updated = await bridge.request({ id: "u1", type: "set_models", models, modelId: "profile-4" });
         assert.equal(updated.ok, true);
+        const changed = await bridge.request({
+          id: "p2", type: "prompt", message: "keep waiting for the worker", systemPrompt: "BACKGROUND_HOST_PROMPT_NEW",
+        });
+        assert.equal(changed.ok, true);
+        assert.equal(childRequests(fake).length, 1, "the original child is still running");
+        childReply.resolve({ text: "child says hello" });
 
         const delivered = await bridge.waitFor(
           (r) => r.event?.type === "message_end" && r.event.message.customType === "workflow-result",
@@ -102,6 +112,8 @@ describe("background workflow results", () => {
         const last = parentRequests.at(-1);
         assert.match(textFor(last, "user"), /Background workflow/);
         assert.equal(last.body.model, "profile-4", "the delivered turn runs on the updated model");
+        assert.match(textFor(last, "system"), /BACKGROUND_HOST_PROMPT_NEW/, "automatic delivery uses the latest host prompt");
+        assert.doesNotMatch(JSON.stringify(last.body.messages), /BACKGROUND_HOST_PROMPT_OLD/);
         assert.ok(
           !bridge.records.slice(afterResponse).some((r) => r.type === "response" && r.id === "p1"),
           "no second answer for the prompt: the follow-up turn is spontaneous",
@@ -112,30 +124,36 @@ describe("background workflow results", () => {
     );
   });
 
-  it("queue a user prompt that arrives while the delivered turn is running", async () => {
-    await withBridge(
-      {
-        script: delegatingRelay({
-          childReply: { delayMs: 200, text: "child says hello" },
-          deliveredReply: { delayMs: 2500, text: "ack: got the result" },
-        }),
-      },
-      async ({ bridge, fake }) => {
-        await prompt(bridge, "p1", "please delegate this");
-        const afterResponse = bridge.records.length;
-        const started = await bridge.waitFor((r) => r.event?.type === "agent_start", { from: afterResponse, label: "spontaneous run", timeoutMs: 45000 });
+  for (const systemPrompt of [undefined, "QUEUED_HOST_PROMPT_NEW"]) {
+    it(`handle a prompt during the delivered turn ${systemPrompt ? "with new host instructions" : "without configuration changes"}`, async () => {
+      await withBridge(
+        {
+          script: delegatingRelay({
+            childReply: { delayMs: 200, text: "child says hello" },
+            deliveredReply: { delayMs: 2500, text: "ack: got the result" },
+          }),
+          init: { systemPrompt: "QUEUED_HOST_PROMPT_OLD" },
+        },
+        async ({ bridge, fake }) => {
+          await prompt(bridge, "p1", "please delegate this");
+          const afterResponse = bridge.records.length;
+          const started = await bridge.waitFor((r) => r.event?.type === "agent_start", { from: afterResponse, label: "spontaneous run", timeoutMs: 45000 });
 
-        const queued = await bridge.request({ id: "p2", type: "prompt", message: "what next" });
-        assert.deepEqual(queued, { type: "response", id: "p2", ok: true });
-        const answered = await bridge.waitFor(
-          (r) => r.event?.type === "message_end" && r.event.message.role === "assistant" && r.event.message.content[0]?.text === "answered: what next",
-          { from: bridge.records.indexOf(started), label: "queued prompt answered", timeoutMs: 45000 },
-        );
-        assert.ok(answered);
-        assert.match(transcript(fake.requests.filter(isParentRequest).at(-1)).join("\n"), /user: what next/);
-      },
-    );
-  });
+          const queued = await bridge.request({ id: "p2", type: "prompt", message: "what next", systemPrompt });
+          assert.deepEqual(queued, { type: "response", id: "p2", ok: true });
+          const answered = await bridge.waitFor(
+            (r) => r.event?.type === "message_end" && r.event.message.role === "assistant" && r.event.message.content[0]?.text === "answered: what next",
+            { from: bridge.records.indexOf(started), label: "queued prompt answered", timeoutMs: 45000 },
+          );
+          assert.ok(answered);
+          const last = fake.requests.filter(isParentRequest).at(-1);
+          assert.match(transcript(last).join("\n"), /user: what next/);
+          assert.ok(textFor(last, "system").includes(systemPrompt ?? "QUEUED_HOST_PROMPT_OLD"));
+          if (systemPrompt) assert.doesNotMatch(JSON.stringify(last.body.messages), /QUEUED_HOST_PROMPT_OLD/);
+        },
+      );
+    });
+  }
 
   it("are paused, not left hanging, when the host shuts down mid-run", async () => {
     await withBridge(

@@ -23,18 +23,21 @@ function isPersonalSkill(skill) {
  * appended to it, and the vendored workflow extension and its skills are always present.
  * Themes and prompt templates are skipped; nothing here renders or expands them.
  */
-export async function createResourceLoader({ cwd, agentDir, settingsManager, systemPrompt }) {
+export async function createResourceLoader({ cwd, agentDir, settingsManager, hostPrompt }) {
   const workflows = resolveWorkflowPackage();
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
     settingsManager,
     additionalExtensionPaths: workflows.extensionPaths,
+    extensionFactories: [{ name: "host-system-prompt", factory: hostPrompt.extension }],
     additionalSkillPaths: workflows.skillPaths,
     noThemes: true,
     noPromptTemplates: true,
-    systemPromptOverride: () => systemPrompt,
-    appendSystemPromptOverride: () => [],
+    // Explicit sources skip SYSTEM.md / APPEND_SYSTEM.md discovery, even for an empty host prompt.
+    systemPrompt: "",
+    appendSystemPrompt: [],
+    systemPromptOverride: hostPrompt.get,
     skillsOverride: (base) => ({
       skills: base.skills.filter((skill) => !isPersonalSkill(skill)),
       diagnostics: base.diagnostics,

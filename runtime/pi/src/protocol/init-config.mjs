@@ -81,6 +81,13 @@ function parseTools(tools) {
   return [...new Set(tools)];
 }
 
+/** An omitted prompt keeps the current value; a present prompt must be a string. */
+export function parseSystemPrompt(command) {
+  if (!Object.hasOwn(command, "systemPrompt")) return undefined;
+  if (typeof command.systemPrompt !== "string") throw new Error("systemPrompt must be a string");
+  return command.systemPrompt;
+}
+
 /**
  * Validate an `init` command and normalise it. Throws a plain Error naming the
  * first problem; the message never contains the token.
@@ -99,6 +106,7 @@ export function parseInit(command) {
     thinkingLevel: parseThinkingLevel(command.thinkingLevel, "off"),
     history: command.history === undefined ? undefined : parseHistory(command.history),
     tools: parseTools(command.tools),
+    systemPrompt: parseSystemPrompt(command),
     trustProject: command.trustProject === true,
   };
 }
