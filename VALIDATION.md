@@ -6,11 +6,20 @@
 - 草稿只留在运行中会话的内存里；完整活动写入与草稿撤下使用同一锁，最终正文随 snapshot 一起交付，避免重复或回退为短摘要。重连使用持久化游标并重取累计草稿；回合结束清理状态，其他会话独立；子代理依旧在主回合完整结束后送入。
 - 前端按收到的增量平滑展开，中文/Emoji 不拆断 UTF-16 代理对；大段迅速追上，完成记录和历史立即完整显示，尊重减少动态效果。SSE 不可用时保留原 2 秒补偿轮询。旧回答 memo 避免随每个新片段重复解析 Markdown。
 - Windows `go test ./... -run '^$'` 全仓库编译、`go vet ./agent ./server`、capture 聚焦测试、TypeScript 与 32 页生产导出通过。新增 hook 的 Biome 检查通过；不把这表述为历史全仓库 lint/测试全绿。
-- GitHub Actions [38612933095](https://github.com/zhyx111999/YETRX/actions/runs/38612933095) 使用 Linux、Go 1.26、独立 PostgreSQL 16 和 `-race` 通过 agent capture/chat/Persona 与 server stream/queue/history 聚焦测试，无 skip。真实 ChatAgent＋受控 provider＋HTTP SSE 验证：第一段在 provider 完成前可见、碎片未写入 DB、认证拒绝匿名、Last-Event-ID 重连不重放已确认行、全文最终只存一次、取消保留部分文字并清草稿、会话隔离、父回合结束前子代理活动仍排队。现有流式/非流式队列、共享资源和历史衔接回归通过。
+- GitHub Actions [38616564006](https://github.com/zhyx111999/YETRX/actions/runs/38616564006) 使用 Linux、Go 1.26、独立 PostgreSQL 16 和 `-race` 通过 agent capture/chat/Persona 与 server stream/queue/history 聚焦测试，无 skip。真实 ChatAgent＋受控 provider＋HTTP SSE 验证：第一段在 provider 完成前可见、碎片未写入 DB、认证拒绝匿名、Last-Event-ID 重连不重放已确认行、全文最终只存一次、取消保留部分文字并清草稿、会话隔离、父回合结束前子代理活动仍排队。现有流式/非流式队列、共享资源和历史衔接回归通过。
 - Edge 桌面 1440×960、移动 390×844 的生产构建＋本地真实 HTTP/SSE fixture 验证，最终一轮分别记录首段 22/26 次可见文字增长，且最后一段尚未发送时正文已经显示。重连、完整 Markdown/代码块、最终正文不重复、刷新历史不重播、无横向溢出和页面运行错误均通过。
 - 补充验证 80 段长回复自动贴底、向上阅读保持位置、切换会话后不泄漏草稿、返回恢复当前草稿、停止后部分正文仅出现一次、减少动态效果直接显示片段，以及断流/503 后实际通过增量 HTTP 轮询取得最终答复。长段测试发现先前排队的 scroll 事件会因下一片段增长而解除贴底；改为向上滚动才解除，重新构建并通过上述检查。
 - `.8` 为未部署的预发布验证版。最终只读审查核实纯空白缓冲不会触发原 capture 落盘，写库失败也可能留下上一段草稿；`.9` 在所有非 usage 的步骤边界清理草稿（包括工具边界和写入失败），隐藏纯空白气泡，usage 继续保留当前正文。新增真实 PostgreSQL 回归同时检查工具后不残留空白、usage 不清正文、外键写入失败后不串入下一段，以及删除会话后读取能退出。
 - 线上只读预检确认现有模型 `streaming:true`，没有调整配置。本轮没有调用真实 Astra；真实模型吞吐量、提供商批量分片与网络延迟仍决定到字速度。数据库和浏览器受控验证分别记录，不冒充生产实模型生成验收。
+
+源码 `ca5750c3ea2151b7b2f4cf626112f96f991d091a` 已推送并发布 [v0.2.5-yetrx.9](https://github.com/zhyx111999/YETRX/releases/tag/v0.2.5-yetrx.9)。Actions `38616564159` 前端、五平台构建和 release 全部成功，Docker 按配置跳过；最终源码的独立数据库/race CI `38616564006` 成功。
+
+- Linux amd64 ZIP SHA256 `bbc83145e823fdaaa2efca81688672c8854ad79fa97d0c0da3b0d30e432f29b8` 已按发布 SHA256SUMS 校验；线上二进制 SHA256 `07a58f1a800454a93c9598cc4bde2c1bbe9664b1ddbbebba9c3a206386bdb640` 与资产一致。健康版本 `0.2.5-yetrx.9`，systemd active。
+- 停服前确认父对话和后台工作流空闲。备份原 `.7` binary、unit、PostgreSQL custom dump、受保护文件压缩包及 SQLite 一致性副本后原子切换。按当次数据核对 49 张受保护表、5989 个文件和 SQLite schema/逻辑内容全部保持；19 会话、3321 活动、1 模型、10 提示词版本、1 Persona 保留。仅沿用既有正常易变表/时间戳例外和精确两个 SQLite WAL/SHM 文件字节例外，没有恢复或覆盖数据库，也没有升级技能或改变文件大小设置。
+- 回滚证据 `/opt/artex/_rollback-v0.2.5-yetrx.9` 保留。`.8` 已标记为预发布，从未部署；生产直接从 `.7` 切到 `.9`。
+- Edge 线上桌面 1440×960、手机 390×844 的真实聊天/设置页面只读检查通过：认证 SSE 为 200 且正确的 event-stream 类型，历史不动画，标题正确，Agent 文件上限回显当次真实 API 值；页面错误、横向溢出与 API 写操作均为 0。独立真实 HTTP 订阅也在连接结束前取得合法 snapshot。此项验证生产传输线路，没有新建模型对话。
+
+- GitHub Actions 的独立测试环境随作业回收；本机操作脚本、下载包、浏览器产物、前端构建缓存，以及远端发布暂存均已清理。临时开发分支已删除，主仓库与外部源码快照同步，保留生产回滚备份。
 
 ## v0.2.5-yetrx.7：回合结束立即回传、每个父对话独享并发
 
