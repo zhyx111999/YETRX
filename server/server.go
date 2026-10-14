@@ -73,7 +73,8 @@ type Server struct {
 	// convBusyKey), so a manual stop can abort JUST that session's agent run. Set/
 	// cleared alongside chatBusy under chatMu. Aborting a run does NOT touch the P3
 	// trigger queue — the drain goroutine simply proceeds to the next queued fire.
-	chatCancel map[string]context.CancelCauseFunc
+	chatCancel  map[string]context.CancelCauseFunc
+	chatStreams map[int64]*conversationStream // active text/thinking drafts, protected by chatMu
 
 	workflows       *workflow.Manager
 	workflowPending map[string][]workflowDelivery // per-conversation FIFO, protected by chatMu
@@ -838,6 +839,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/conversations/{id}/profile", s.pgUpdateConversation)
 	mux.HandleFunc("DELETE /api/conversations/{id}", s.pgDeleteConversation)
 	mux.HandleFunc("GET /api/conversations/{id}/messages", s.pgConversationMessages)
+	mux.HandleFunc("GET /api/conversations/{id}/stream", s.pgConversationStream)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", s.pgSendConversationMessage)
 	mux.HandleFunc("POST /api/conversations/{id}/stop", s.pgStopConversation)
 	mux.HandleFunc("GET /api/conversations/{id}/messages/{seq}", s.pgConversationMsgDetail)

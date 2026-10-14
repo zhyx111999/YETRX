@@ -658,6 +658,7 @@ export interface Activity {
   is_error?: boolean;
   summary: string;
   detail?: string;
+  streaming?: boolean; // transient conversation draft; history never replays typing
   metadata?: {
     llm_transition?: LLMTransition;
   };

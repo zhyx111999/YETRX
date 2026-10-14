@@ -54,6 +54,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useSideQuestions } from "@/hooks/use-side-questions";
+import { type ConversationStreamSnapshot, useConversationStream } from "@/hooks/use-conversation-stream";
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
 import { filesFromClipboard } from "@/lib/chat-attachments";
@@ -486,6 +487,7 @@ function ChatView({
 }) {
   const approvalFocus = useApprovalFocus({ conversationId: conv.id });
   const [messages, setMessages] = React.useState<Activity[]>([]);
+  const [draft, setDraft] = React.useState<Activity | null>(null);
   const [running, setRunning] = React.useState(false);
   const [input, setInput] = React.useState(initial?.input ?? "");
   const [sending, setSending] = React.useState(false);
@@ -535,6 +537,7 @@ function ChatView({
     hasMoreRef.current = false;
     setHasMore(false);
     setMessages([]);
+    setDraft(null);
     setHistoryLoaded(false);
     setRunning(false);
     let live = true;
@@ -566,36 +569,17 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // Every mode can receive background tool results after its foreground turn.
-  React.useEffect(() => {
-    if (!historyLoaded) return;
-    let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      let delay = 2000;
-      try {
-        const r = await api.conversationMessages(conv.id, cursorRef.current);
-        if (!live) return;
-        if (r.items.length) {
-          setMessages((prev) => mergeActivities(prev, r.items));
-        }
-        cursorRef.current = Math.max(cursorRef.current, r.cursor);
-        delay = r.running ? 1000 : 2000;
-        setRunning(r.running);
-        if (r.items.length || (running && !r.running)) onTitleMaybeChanged();
-      } catch {
-        /* transient — keep polling */
-      } finally {
-        // Slow responses must not overlap another poll with the same cursor.
-        if (live) timer = setTimeout(() => void tick(), delay);
-      }
-    };
-    void tick();
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [historyLoaded, running, conv.id, onTitleMaybeChanged]);
+  // The draft and its completed row arrive together, avoiding a duplicate bubble
+  // or a truncated preview between the last token and the durable answer.
+  const receiveStream = React.useCallback((snapshot: ConversationStreamSnapshot) => {
+    if (snapshot.items.length) {
+      setMessages((prev) => mergeActivities(prev, snapshot.items));
+      onTitleMaybeChanged();
+    }
+    setDraft(snapshot.draft);
+    setRunning(snapshot.running);
+  }, [onTitleMaybeChanged]);
+  useConversationStream(conv.id, historyLoaded, cursorRef, receiveStream);
 
   const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {
@@ -649,7 +633,14 @@ function ChatView({
       if (vp.scrollTop <= 80) void loadEarlier(); // near top → pull an older page
     };
     vp.addEventListener("scroll", onScroll, { passive: true });
-    return () => vp.removeEventListener("scroll", onScroll);
+    const resize = new ResizeObserver(() => {
+      if (!approvalFocus.state && atBottomRef.current) vp.scrollTop = vp.scrollHeight;
+    });
+    if (contentRef.current) resize.observe(contentRef.current);
+    return () => {
+      vp.removeEventListener("scroll", onScroll);
+      resize.disconnect();
+    };
   }, [viewport, loadEarlier, approvalFocus.state, focusHistory.ready]);
   // open/switch a conversation → jump to the latest (bottom)
   // biome-ignore lint/correctness/useExhaustiveDependencies: changing conversations intentionally retriggers the scroll reset.
@@ -666,7 +657,7 @@ function ChatView({
     if (approvalFocus.state || !atBottomRef.current) return;
     const vp = viewport();
     if (vp) vp.scrollTop = vp.scrollHeight;
-  }, [messages, running, viewport, approvalFocus.state]);
+  }, [messages, draft, running, viewport, approvalFocus.state]);
 
   // Per-conversation token total, live — same accounting as the main-agent
   // console: completed runs' `result` sum + the in-progress run's latest `usage`.
@@ -734,9 +725,8 @@ function ChatView({
     }
   }
 
-  // stop aborts the in-flight run for this conversation. running flips to false on
-  // the next 1s poll once the backend unwinds the agent; the trigger queue is not
-  // affected — the agent's next queued fire still starts.
+  // Stop cancels this conversation's run; the stream reports its final status.
+  // The trigger queue can still start the agent's next queued fire.
   async function stop() {
     if (stopping) return;
     setStopping(true);
@@ -794,7 +784,7 @@ function ChatView({
               {hasMore && (
                 <div className="text-muted-foreground/70 pb-2 text-center text-[11px]">向上滚动加载更早的消息…</div>
               )}
-              <Transcript activity={messages} live={running} chat fetchDetail={fetchDetail} focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined} />
+              <Transcript activity={draft ? [...messages, draft] : messages} live={running} chat fetchDetail={fetchDetail} focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined} />
             </>
           )}
         </div>

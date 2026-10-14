@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { ChatFileMessage } from "@/components/chat-file-message";
 import { Markdown } from "@/components/markdown";
+import { useStreamingText } from "@/hooks/use-streaming-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -508,13 +509,13 @@ function MessageBlock({
   const Icon = isError ? Flag : MessageSquare;
   const tone = isError ? "text-red-600 dark:text-red-400" : "text-foreground";
 
-  const detailKey = group.steps.map((s) => s.seq).join(",");
+  const detailKey = group.steps.map((s) => `${s.seq}:${s.detail?.length ?? 0}`).join(",");
   React.useEffect(() => {
     if (!open || loadedKey.current === detailKey) return;
     let live = true;
     void Promise.all(
       group.steps.map((s) =>
-        getDetail(s.seq)
+        (s.detail !== undefined ? Promise.resolve(s.detail) : getDetail(s.seq))
           .then((d) => d || s.summary)
           .catch(() => s.summary),
       ),
@@ -642,11 +643,13 @@ function UserRow({ step, intent, getDetail }: { step: Activity; intent?: boolean
 // AnswerBlock renders the agent's FINAL answer (kind="result") in full — never
 // collapsed. The summary is a truncated first line, so the full text is pulled
 // from the detail and shown inline.
-function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: number) => Promise<string> }) {
+const AnswerBlock = React.memo(function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: number) => Promise<string> }) {
   const [ref, inView] = useInView();
   const [full, setFull] = React.useState<string | null>(null);
+  const inline = step.detail;
+  const body = useStreamingText(inline ?? full ?? step.summary, !!step.streaming);
   React.useEffect(() => {
-    if (!inView) return; // fetch the full answer only when it nears view
+    if (inline !== undefined || !inView) return;
     let live = true;
     getDetail(step.seq)
       .then((d) => {
@@ -658,9 +661,9 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
     return () => {
       live = false;
     };
-  }, [inView, step.seq, getDetail, step.summary]);
+  }, [inView, step.seq, getDetail, step.summary, inline]);
   return (
-    <div ref={ref} className="mb-2 mt-1 flex min-w-0 flex-col gap-1">
+    <div ref={ref} className="mb-2 mt-1 flex min-w-0 flex-col gap-1" data-streaming={step.streaming || undefined}>
       <div
         className={
           "min-w-0 flex-1 break-words rounded-lg bg-muted px-3 py-2 " +
@@ -668,15 +671,15 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
         }
       >
         {step.is_error ? (
-          <span className="whitespace-pre-wrap">{full ?? step.summary}</span>
+          <span className="whitespace-pre-wrap">{body}</span>
         ) : (
-          <Markdown text={full ?? step.summary} />
+          <Markdown text={body} />
         )}
       </div>
       <ActivityTime ts={step.ts} />
     </div>
   );
-}
+});
 
 // ExecView renders an agent execution replay (planner / worker / main agent) in
 // the compact, grouped, expand-to-detail format — thinking, tool calls/results,

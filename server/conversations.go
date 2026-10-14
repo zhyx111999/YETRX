@@ -571,8 +571,11 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		webSearch = a.WebSearch
 	}
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
+	stream, closeStream := s.beginConversationStream(c.ID, c.AgentKey)
+	defer closeStream()
+	ctx = agent.WithActivityStream(ctx, stream.delta)
 	emit := func(rec db.Activity) {
-		if _, err := pg.AppendConvActivity(c.ID, rec); err != nil {
+		if err := stream.append(pg, c.ID, rec); err != nil {
 			log.Printf("[conv %d] append activity failed: %v", c.ID, err)
 		}
 	}

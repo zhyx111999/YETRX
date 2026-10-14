@@ -481,6 +481,7 @@ type ActivityDTO struct {
 	IsError      bool            `json:"is_error"`
 	Summary      string          `json:"summary"`
 	Detail       string          `json:"detail,omitempty"`
+	Streaming    bool            `json:"streaming,omitempty"` // transient conversation draft; never stored
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 	SourceTaskID string          `json:"source_task_id,omitempty"`
 	Inherited    bool            `json:"inherited,omitempty"`

@@ -68,6 +68,7 @@ func captureRunSession(ctx context.Context, s promptSession, input string, emit 
 			rec(db.Activity{Kind: k, Summary: firstLine(s, 200), Detail: s})
 		}
 	}
+	stream := activityStreamFrom(ctx)
 	addDelta := func(kind, text string) {
 		if text == "" {
 			return
@@ -77,6 +78,9 @@ func captureRunSession(ctx context.Context, s promptSession, input string, emit 
 		}
 		tkind = kind
 		tbuf.WriteString(text)
+		if stream != nil {
+			stream(kind, text)
+		}
 	}
 	lastTool := &runTrace{startedAt: time.Now()}
 	var lastUsage *llm.Usage

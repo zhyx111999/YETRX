@@ -1,0 +1,57 @@
+name: conversation-stream
+on:
+  push:
+    paths:
+      - "agent/**"
+      - "server/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/conversation-stream.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "server/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/conversation-stream.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: yetrx_test
+          POSTGRES_PASSWORD: isolated_test_only
+          POSTGRES_DB: yetrx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yetrx_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ARTEX_PG_DSN: postgres://yetrx_test:isolated_test_only@127.0.0.1:5432/yetrx_test?sslmode=disable
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Prepare the server embed fixture
+        run: |
+          mkdir -p server/webui/dist
+          printf '<html>stream integration tests</html>' > server/webui/dist/index.html
+      - name: Check agent streaming and conversation delivery
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race ./agent -run '^(TestCapture.*|TestChat.*|Test.*Persona.*)$' -v -count=1 -timeout=180s | tee agent-test.log
+          go test -race ./server -run '^(TestConversationStream.*|TestWorkflowDelivery.*|TestNativeWorkflowUsesSharedResourcesAndQueuesDelivery|TestNativeWorkflowStopSuppressesQueuedReplyAndCancelledStart|TestNativeHistoryImportPreservesLedgerAndRunsOnce)$' -v -count=1 -timeout=180s | tee server-test.log
+          ! grep -q -- '--- SKIP:' agent-test.log server-test.log
