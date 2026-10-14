@@ -12,6 +12,7 @@ import (
 // and enabled flags remain user-owned. Retaining old strings here is intentional.
 var previousDelegationDescriptions = map[string][]string{
 	"subagents": {
+		"在后台启动独立子任务。立即返回 run_id，结束后结果自动回到当前对话。子任务使用全局模式、模型和资源；depends_on 可连接前后步骤。",
 		"在后台启动独立子任务。立即返回 run_id，结束后结果自动回到当前对话。子任务继承当前会话实际使用的模型配置、全局资源和上下文约束；depends_on 可连接前后步骤。",
 		"后台启动原生子任务，立即返回 run_id；结束或暂停时自动回传。子任务继承当前会话实际使用的模型配置。默认共享运行 cwd，显式 isolation=worktree 创建独立源码副本。",
 	},
@@ -61,7 +62,7 @@ func (s *Server) upgradeDelegationDescription(tool actool.CoreTool) error {
 		}
 		properties, _ := value["properties"].(map[string]any)
 		label, _ := properties["label"].(map[string]any)
-		if label["description"] == "read/message 的单个子任务" {
+		if label["description"] == "read/message 的单个子任务" || label["description"] == "read 指定一个子任务" {
 			label["description"] = "read/message 的单个子代理 label"
 			schema, err = json.Marshal(value)
 			if err != nil {

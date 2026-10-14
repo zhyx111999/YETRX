@@ -46,7 +46,15 @@ func TestDelegationDescriptionUpgradePreservesUserChoices(t *testing.T) {
 		if err := e.pg.SeedTool(key, tool.Description(), raw, mustJSON([]string{e.keys[1]})); err != nil {
 			t.Fatal(err)
 		}
-		for _, old := range previousDelegationDescriptions[key] {
+		for index, old := range previousDelegationDescriptions[key] {
+			oldLabel := "read/message 的单个子任务"
+			if key == "subagents_control" {
+				if index == 0 {
+					oldLabel = "read 指定一个子任务"
+				}
+				props["label"].(map[string]any)["description"] = oldLabel
+				raw = mustJSON(schema)
+			}
 			if err := e.pg.UpdateTool(key, old, raw, mustJSON([]string{e.keys[1]}), false); err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +79,7 @@ func TestDelegationDescriptionUpgradePreservesUserChoices(t *testing.T) {
 				if gotLabel["description"] != "read/message 的单个子代理 label" {
 					t.Fatal("legacy label not upgraded")
 				}
-				gotLabel["description"] = "read/message 的单个子任务"
+				gotLabel["description"] = oldLabel
 			}
 			var want map[string]any
 			_ = json.Unmarshal(raw, &want)
