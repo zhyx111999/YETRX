@@ -1,5 +1,18 @@
 # 验证记录
 
+## v0.2.5-yetrx.4：可配置的 Agent 文件大小上限
+
+- 系统配置新增独立「Agent 文件发送」卡片。`chat_file_max_mib` 使用既有 settings 存储，默认 128 MiB，0 表示不限制；保存后由后续每次发送动态读取，无需重建 Agent 或重启。前后端校验非负整数及安全字节换算范围。
+- 文件复制的初始大小与实际复制字节都使用本次读取的上限。修改上限不会影响正在复制的文件，也不影响已发附件下载；用户上传接口继续使用原来的请求体限制。
+- 下载改为认证 HEAD 预检，再通过同源认证 cookie 交给浏览器直接下载；不再将整个文件读成 JavaScript Blob，不在 URL 里传 token。
+- 升级时仅替换 `send_file` 原有默认说明里的固定上限文字；用户说明、参数默认值、绑定和开关保持。
+- 独立 PostgreSQL 数据库实际执行 `TestChatFileSettingsRuntimeLimitAndPersistence`、`TestChatFileDescriptionUpgradePreservesCustomTool`、原附件复制/认证下载测试，以及受影响的 finding/notify 设置回归测试，全部通过，无 skip。覆盖数据库持久化、新服务实例读取、同一工具实例连续改限、恰好上限与超一字节、实际发送 129 MiB + 1 字节、0 不限大小、旧附件降限后下载、部分更新、非法配置修复，以及 HEAD/Bearer 与 GET/cookie 下载。
+- Linux 服务端测试二进制编译、`go vet ./server`、前端 TypeScript 和 32 页生产静态导出、新配置组件 Biome 检查通过。Windows 本机无数据库时的两项数据库测试未在本机完成，已由上述独立 PostgreSQL 实跑覆盖。
+- Edge 桌面 1440px、移动 390px 使用生产构建和受控设置 API 验证保存 1024、刷新回显、保存 0、拒绝负数/小数/空输入、服务端失败保留原值。附件下载走实际本地 HTTP 响应，验证认证 HEAD、cookie GET、中文名称与完整字节，页面运行错误为 0。
+
+部署与发布结果将在完成后补充。
+
+
 ## v0.2.5-yetrx.3：原生工作流机制与 Agent 文件交付
 
 2026-10-14，发布前验收已完成。源码继续使用 Go `workflow.Manager`、`ChatAgent` 和现有 Norma API；本次未修改 Norma，未恢复 JavaScript runtime。

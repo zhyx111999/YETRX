@@ -15,6 +15,7 @@ import { api } from "@/lib/api";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
 import type { Settings } from "@/lib/types";
 
+import { ChatFileSettingsCard } from "./_components/chat-file-settings-card";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -26,6 +27,7 @@ export default function SystemSettingsPage() {
   const [braveKeyInput, setBraveKeyInput] = React.useState("");
   const [tavilyKeySet, setTavilyKeySet] = React.useState(false);
   const [tavilyKeyInput, setTavilyKeyInput] = React.useState("");
+  const [chatFileMaxMiB, setChatFileMaxMiB] = React.useState<number | undefined>(undefined);
   const [savingTavilyKey, setSavingTavilyKey] = React.useState(false);
   const [proxyInput, setProxyInput] = React.useState("");
   const [savingProxy, setSavingProxy] = React.useState(false);
@@ -60,6 +62,7 @@ export default function SystemSettingsPage() {
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
+    setChatFileMaxMiB(s.chat_file_max_mib);
   }, []);
 
   const saveWorkers = () => {
@@ -267,6 +270,8 @@ export default function SystemSettingsPage() {
           column-gap 只管列间距，行间距要由子元素自己给。 */}
       <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
         <UpdateCard />
+
+        <ChatFileSettingsCard limit={chatFileMaxMiB} loaded={loaded} onSaved={setChatFileMaxMiB} />
 
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>

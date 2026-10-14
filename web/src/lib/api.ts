@@ -3,6 +3,7 @@
 // a few fields the backend serializes differently (e.g. created_at as a unix int)
 // are passed through and formatted at the call site.
 
+import { auth } from "@/lib/auth";
 import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
 import { mockHandle } from "@/lib/mock/handler";
@@ -1015,23 +1016,23 @@ export const api = {
   // ---- conversations (chat page) ----
   downloadChatFile: async (file: ChatFile) => {
     const token = getToken();
-    const response = await fetch(
-      `/api/conversations/${file.conversation_id}/files/${encodeURIComponent(file.id)}`,
-      { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
-    );
+    if (!token) throw new Error("请先登录后下载");
+    // Native downloads use the existing same-origin auth cookie and stream to
+    // the browser's download manager, avoiding a whole-file JavaScript Blob.
+    auth.setToken(token);
+    const url = `/api/conversations/${file.conversation_id}/files/${encodeURIComponent(file.id)}`;
+    const response = await fetch(url, { method: "HEAD", headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) {
       if (response.status === 401) throw new Error("登录已过期，请重新登录后下载");
       throw new Error(response.status === 404 ? "附件不存在或已随会话删除" : `下载失败: ${response.status}`);
     }
-    const url = URL.createObjectURL(await response.blob());
+    if (getToken() !== token) throw new Error("登录状态已改变，请重新下载");
     const link = document.createElement("a");
     link.href = url;
     link.download = file.name;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    // Allow mobile browsers time to consume the object URL after the click.
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
   conversations: () => get<{ conversations: Conversation[] }>("/conversations").then((r) => arr(r.conversations)),

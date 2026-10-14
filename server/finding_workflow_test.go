@@ -45,7 +45,11 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pg.SetBool(settingAgentTrafficBinding, false) })
-	if s.settingsPayload()[settingAgentTrafficBinding] != false {
+	payload, err := s.settingsPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload[settingAgentTrafficBinding] != false {
 		t.Fatal("missing setting must default off")
 	}
 	seedServerEvidenceFlow(t, s, "handoff-proof", []byte("verified local proof"))

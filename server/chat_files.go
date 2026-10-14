@@ -53,6 +53,11 @@ func (s *Server) copyChatFile(ctx context.Context, convID int64, source, name st
 	if err = ctx.Err(); err != nil {
 		return file, err
 	}
+	limitMiB, err := s.chatFileMaxMiB()
+	if err != nil {
+		return file, err
+	}
+	limitBytes := limitMiB << 20
 	if name == "" {
 		name = filepath.Base(source)
 	}
@@ -66,8 +71,8 @@ func (s *Server) copyChatFile(ctx context.Context, convID int64, source, name st
 	if !info.Mode().IsRegular() {
 		return file, fmt.Errorf("只能发送普通文件；目录请先打包")
 	}
-	if info.Size() > maxChatUpload {
-		return file, fmt.Errorf("文件超过 128 MiB 限制")
+	if limitBytes > 0 && info.Size() > limitBytes {
+		return file, fmt.Errorf("文件超过系统配置的 %d MiB 限制", limitMiB)
 	}
 	input, err := os.Open(source)
 	if err != nil {
@@ -105,9 +110,13 @@ func (s *Server) copyChatFile(ctx context.Context, convID int64, source, name st
 		return file, err
 	}
 	hash := sha256.New()
-	file.Size, err = io.Copy(io.MultiWriter(output, hash), io.LimitReader(&chatFileReader{ctx: ctx, reader: input}, maxChatUpload+1))
-	if err == nil && file.Size > maxChatUpload {
-		err = fmt.Errorf("文件超过 128 MiB 限制")
+	var reader io.Reader = &chatFileReader{ctx: ctx, reader: input}
+	if limitBytes > 0 {
+		reader = io.LimitReader(reader, limitBytes+1)
+	}
+	file.Size, err = io.Copy(io.MultiWriter(output, hash), reader)
+	if err == nil && limitBytes > 0 && file.Size > limitBytes {
+		err = fmt.Errorf("文件超过系统配置的 %d MiB 限制", limitMiB)
 	}
 	if err == nil {
 		err = output.Sync()

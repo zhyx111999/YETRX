@@ -655,7 +655,10 @@ func TestNotifyMetaAndSettingsRoundTrip(t *testing.T) {
 	t.Cleanup(func() {
 		f.pg.Exec(`DELETE FROM settings WHERE key IN ($1,$2)`, settingNotifyPublicBaseURL, settingNotifyDigestMinutes)
 	})
-	payload := f.s.settingsPayload()
+	payload, err := f.s.settingsPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if payload["notify_public_base_url"] != "https://artex.example.com" {
 		t.Fatalf("回链地址未规范化: %v", payload["notify_public_base_url"])
 	}

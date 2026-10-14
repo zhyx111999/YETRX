@@ -53,7 +53,7 @@ func TestChatFileCopyPreservesBytesAndRejectsInvalidSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = f.Truncate(maxChatUpload + 1); err != nil {
+	if err = f.Truncate((defaultChatFileMaxMiB << 20) + 1); err != nil {
 		t.Fatal(err)
 	}
 	_ = f.Close()
@@ -149,6 +149,23 @@ func TestChatFileToolAndAuthenticatedDownload(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != 200 || string(data) != content || !strings.HasPrefix(response.Header.Get("Content-Disposition"), "attachment;") || response.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("download contract failed", response.StatusCode, string(data))
+	}
+	head := request("HEAD", url, token, "")
+	data, _ = io.ReadAll(head.Body)
+	_ = head.Body.Close()
+	if head.StatusCode != 200 || len(data) != 0 || head.ContentLength != int64(len(content)) {
+		t.Fatal("download preflight failed", head.StatusCode, head.ContentLength)
+	}
+	cookieRequest, _ := http.NewRequest("GET", url, nil)
+	cookieRequest.AddCookie(&http.Cookie{Name: "artex_token", Value: token})
+	cookieResponse, err := http.DefaultClient.Do(cookieRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(cookieResponse.Body)
+	_ = cookieResponse.Body.Close()
+	if cookieResponse.StatusCode != 200 || string(data) != content {
+		t.Fatal("native cookie download failed")
 	}
 	partial := request("GET", url, token, "bytes=0-2")
 	data, _ = io.ReadAll(partial.Body)
