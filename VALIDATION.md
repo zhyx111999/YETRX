@@ -10,7 +10,14 @@
 - Linux 服务端测试二进制编译、`go vet ./server`、前端 TypeScript 和 32 页生产静态导出、新配置组件 Biome 检查通过。Windows 本机无数据库时的两项数据库测试未在本机完成，已由上述独立 PostgreSQL 实跑覆盖。
 - Edge 桌面 1440px、移动 390px 使用生产构建和受控设置 API 验证保存 1024、刷新回显、保存 0、拒绝负数/小数/空输入、服务端失败保留原值。附件下载走实际本地 HTTP 响应，验证认证 HEAD、cookie GET、中文名称与完整字节，页面运行错误为 0。
 
-部署与发布结果将在完成后补充。
+源码提交 `a089b0cc806fa4f96e22c5b40d4d38fd501e7a9e` 已推送并发布 [v0.2.5-yetrx.4](https://github.com/zhyx111999/YETRX/releases/tag/v0.2.5-yetrx.4)。Actions `38540175058` 前端、五平台构建和 release 全部成功，Docker 按配置跳过。
+
+- Linux amd64 ZIP SHA256 `eed611a19f6ab86624c62c42574fabbbb0d03d64388e84de24873645800914f9` 已按 SHA256SUMS 校验；线上二进制 SHA256 `f4ef44acffe9ee493f526f30fa0c6bb8343e9c26717ccbe5d8cb6cf0949c6311` 与发布资产一致。
+- 生产健康版本 `0.2.5-yetrx.4`，systemd active；认证 settings API 返回 `chat_file_max_mib:128`，未认证修改被拒绝。没有在生产修改默认上限进行测试。
+- 线上真实 API 与页面的只读浏览器检查通过：桌面/手机均展示新卡片并回显 128 MiB，无横向溢出和页面运行错误。
+- 部署前后 47 张受保护表与 5931 个文件（含全局技能）核对通过；19 个会话、3321 条活动、1 个模型配置、10 条提示词版本、1 个人格均保留。这里为本次切换时的现状，不按旧版本数量恢复用户已删除或新增的记录。`agents`/`mcp_servers` 仅排除启动自动刷新的 `updated_at`；settings、JWT、systemd、工具偏好和技能文件均保持。
+- 回滚目录 `/opt/artex/_rollback-v0.2.5-yetrx.4` 保留原 `.3` 二进制、数据库 dump 和完整性记录；未自动恢复或覆盖生产数据库。
+- 独立测试数据库/角色 `yetrx_file_limit_20261014`、测试二进制、临时凭据和本机操作/构建缓存在验收后清理，保留生产回滚备份。
 
 
 ## v0.2.5-yetrx.3：原生工作流机制与 Agent 文件交付
