@@ -23,7 +23,7 @@ type Manager struct {
 	dir        string
 	runner     Runner
 	onComplete func(Run)
-	sem        chan struct{} // one token per running task, process-wide
+	limiter    *sessionLimiter // running-task slots, separate for every owner session
 	wg         sync.WaitGroup
 
 	mu   sync.Mutex // guards runs and every entry
@@ -37,7 +37,7 @@ type entry struct {
 	ctx           context.Context // current execution; cancel != nil while tasks are in flight
 	cancel        context.CancelFunc
 	done          chan struct{}   // closed when the current execution has drained
-	launched      map[string]bool // tasks with a goroutine in flight (waiting for a slot or running)
+	launched      map[string]bool // tasks with a goroutine in flight (waiting for a session slot or running)
 	stopping      bool
 	pausing       bool
 	draining      int
@@ -50,7 +50,9 @@ type entry struct {
 // New loads the runs saved in dir and returns a Manager whose work lives as long
 // as ctx. Runs found still "running" (the process died or shut down under them)
 // are marked interrupted, saved, and reported through onComplete once; nothing is
-// re-run. concurrency <= 0 means DefaultConcurrency. onComplete may be nil.
+// re-run. concurrency is the number of tasks one owner session may have running
+// at once, shared by all of that session's runs; other sessions have their own.
+// concurrency <= 0 means DefaultConcurrency. onComplete may be nil.
 //
 // onComplete receives a snapshot of a run each time it reaches a terminal state
 // (succeeded, failed, stopped, interrupted or paused). It is called from its own goroutine
@@ -71,7 +73,7 @@ func New(ctx context.Context, dir string, concurrency int, runner Runner, onComp
 	}
 	m := &Manager{
 		ctx: ctx, dir: dir, runner: runner, onComplete: onComplete,
-		sem: make(chan struct{}, concurrency), runs: make(map[string]*entry, len(saved)),
+		limiter: newSessionLimiter(concurrency), runs: make(map[string]*entry, len(saved)),
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -106,7 +108,7 @@ func New(ctx context.Context, dir string, concurrency int, runner Runner, onComp
 // Start validates tasks and begins running them in the background; it returns
 // the run id at once. depth is the caller's nesting depth (0 for the top-level
 // assistant; use Job.Depth inside a Runner). Tasks without DependsOn start
-// immediately, in parallel, subject to the global concurrency limit.
+// immediately, in parallel, subject to the owner session's concurrency limit.
 func (m *Manager) Start(ownerSession, ownerAgent string, depth int, tasks []Task) (string, error) {
 	return m.StartWithOptions(ownerSession, ownerAgent, depth, tasks, Options{})
 }

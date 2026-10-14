@@ -140,34 +140,39 @@ func wantStatus(t *testing.T, r Run, run Status, tasks map[string]Status) {
 }
 
 // probe records what a Runner saw: call counts, event order, and the real
-// number of tasks executing at once.
+// number of tasks executing at once, overall and per owner session.
 type probe struct {
-	mu      sync.Mutex
-	calls   map[string]int
-	events  []string // "start:x" / "end:x"
-	cur     int
-	max     int
-	started chan string
+	mu       sync.Mutex
+	calls    map[string]int
+	events   []string // "start:x" / "end:x"
+	cur      int
+	max      int
+	owners   map[string]int // executing now, by owner session
+	ownerMax map[string]int
+	started  chan string
 }
 
 func newProbe() *probe {
-	return &probe{calls: map[string]int{}, started: make(chan string, 256)}
+	return &probe{calls: map[string]int{}, owners: map[string]int{}, ownerMax: map[string]int{}, started: make(chan string, 256)}
 }
 
 // run wraps body with bookkeeping.
 func (p *probe) run(body Runner) Runner {
 	return func(ctx context.Context, job Job) (string, error) {
-		label := job.Task.Label
+		label, owner := job.Task.Label, job.OwnerSession
 		p.mu.Lock()
 		p.calls[label]++
 		p.cur++
 		p.max = max(p.max, p.cur)
+		p.owners[owner]++
+		p.ownerMax[owner] = max(p.ownerMax[owner], p.owners[owner])
 		p.events = append(p.events, "start:"+label)
 		p.mu.Unlock()
 		p.started <- label
 		defer func() {
 			p.mu.Lock()
 			p.cur--
+			p.owners[owner]--
 			p.events = append(p.events, "end:"+label)
 			p.mu.Unlock()
 		}()
@@ -191,6 +196,30 @@ func (p *probe) running() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.cur
+}
+
+// runningFor and peakFor are running and peak for one owner session.
+func (p *probe) runningFor(owner string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.owners[owner]
+}
+
+func (p *probe) peakFor(owner string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ownerMax[owner]
+}
+
+// expectRunning waits for n tasks to be executing, then gives an over-eager
+// scheduler time to start more and fails if it did.
+func (p *probe) expectRunning(t *testing.T, n int) {
+	t.Helper()
+	eventually(t, fmt.Sprintf("%d tasks executing", n), func() bool { return p.running() >= n })
+	time.Sleep(150 * time.Millisecond)
+	if got := p.running(); got != n {
+		t.Fatalf("%d tasks executing, want exactly %d", got, n)
+	}
 }
 
 func (p *probe) index(event string) int {

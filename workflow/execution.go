@@ -9,8 +9,9 @@ import (
 )
 
 // A timed-out runner gets the same ten-second drain grace as pi. It cannot
-// overlap a retry. An uncooperative runner keeps its slot and blocks resume
-// until it really returns, even after the task has reported failure.
+// overlap a retry. An uncooperative runner keeps its session slot and blocks
+// resume until it really returns, even after the task has reported failure.
+// Only its own session's slots are affected.
 var drainGrace = 10 * time.Second
 
 type threadState struct {
@@ -22,19 +23,16 @@ type outcome struct {
 	err  error
 }
 
-func (m *Manager) execute(e *entry, ctx context.Context, label string) {
+// execute runs one task of owner's run. It holds one of owner's session slots
+// from the start of its workspace until the runner (and any drain) is over.
+func (m *Manager) execute(e *entry, ctx context.Context, owner, label string) {
 	defer m.wg.Done()
-	select {
-	case m.sem <- struct{}{}:
-		defer func() { <-m.sem }()
-	case <-ctx.Done():
-		m.complete(e, label, "", ctx.Err())
+	release, err := m.limiter.acquire(ctx, owner)
+	if err != nil {
+		m.complete(e, label, "", err)
 		return
 	}
-	if ctx.Err() != nil {
-		m.complete(e, label, "", ctx.Err())
-		return
-	}
+	defer release()
 	m.mu.Lock()
 	task := cloneTasks([]Task{e.run.Tasks[e.idx[label]]})[0]
 	base := e.run.Options.CWD

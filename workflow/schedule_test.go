@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -58,41 +57,6 @@ func TestJobCarriesOwnerAndDepth(t *testing.T) {
 	if job.RunID != id || job.OwnerSession != "conv-9" || job.OwnerAgent != "main" || job.Depth != 1 ||
 		job.Task.Label != "a" || job.Task.AgentKey != "k" {
 		t.Errorf("job = %+v", job)
-	}
-}
-
-func TestGlobalConcurrencyLimit(t *testing.T) {
-	const limit = 3
-	release := make(chan struct{})
-	p := newProbe()
-	e := open(t, t.TempDir(), limit, p.run(block(release)))
-
-	// Two owners, five independent tasks each: ten runnable at once, three allowed.
-	e.start("conv-1", independent(5)...)
-	e.start("conv-2", independent(5)...)
-	for range limit {
-		p.waitStarted(t)
-	}
-	time.Sleep(150 * time.Millisecond) // time for an over-eager scheduler to overshoot
-	if n := p.running(); n != limit {
-		t.Fatalf("%d tasks executing, want exactly %d", n, limit)
-	}
-	if len(p.started) != 0 {
-		t.Fatal("a task beyond the limit started")
-	}
-
-	close(release)
-	e.next()
-	e.next()
-	if p.peak() != limit {
-		t.Errorf("peak concurrency = %d, want %d", p.peak(), limit)
-	}
-	total := 0
-	for i := range 5 {
-		total += p.called(fmt.Sprintf("t%d", i))
-	}
-	if total != 10 { // the same five labels in both runs
-		t.Errorf("tasks executed = %d, want 10", total)
 	}
 }
 

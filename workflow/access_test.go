@@ -255,7 +255,11 @@ func TestConcurrentUse(t *testing.T) {
 			}
 		}
 	}
-	if p.peak() > limit {
-		t.Errorf("peak concurrency %d exceeded %d", p.peak(), limit)
+	for o := range owners {
+		session := fmt.Sprintf("conv-%d", o)
+		if peak := p.peakFor(session); peak > limit {
+			t.Errorf("%s peak concurrency %d exceeded %d", session, peak, limit)
+		}
 	}
+	eventually(t, "every session slot released", func() bool { return e.m.limiter.sessions() == 0 })
 }

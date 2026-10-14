@@ -41,7 +41,7 @@ func (m *Manager) advance(e *entry) {
 				}
 				e.launched[t.Label] = true
 				m.wg.Add(1)
-				go m.execute(e, e.ctx, t.Label)
+				go m.execute(e, e.ctx, e.run.OwnerSession, t.Label)
 			}
 		}
 	}

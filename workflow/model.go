@@ -1,8 +1,11 @@
 // Package workflow keeps the state of native background sub-task runs: it
 // validates a batch of tasks (independent ones run in parallel, dependent ones
-// wait for their dependencies), schedules them under one process-wide
-// concurrency limit, persists every state change to <dir>/<runID>.json and tells
-// the owner when a run reaches a terminal state.
+// wait for their dependencies), schedules them under a concurrency limit that
+// applies separately to each owner session, persists every state change to
+// <dir>/<runID>.json and tells the owner when a run reaches a terminal state.
+// All runs of one conversation share its limit; conversations do not share one.
+// Slots are tied to live runners: a cancelled or timed-out runner that has not
+// returned still holds its session's slot, and only that session notices.
 //
 // It does not execute anything itself. The Runner supplied to New runs one task
 // (the server wires it to a native ChatAgent), so there is exactly one agent
@@ -25,7 +28,7 @@ const (
 	MaxTasks           = 32 // tasks per run
 	MaxDepth           = 1  // children cannot dispatch or control workflows
 	MaxAgentRetries    = 3
-	DefaultConcurrency = 4    // default global limit of simultaneously running tasks
+	DefaultConcurrency = 4    // default limit of simultaneously running tasks per owner session
 	MaxReadChars       = 8000 // Read never returns more than this many characters
 )
 
