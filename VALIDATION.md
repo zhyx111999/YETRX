@@ -17,7 +17,12 @@
 - `.5` 上线后的当次核对：48 张受保护表（含 settings，Agent 名称/说明只允许精确旧默认升级；tools 另作逐字段比较）、5986 个文件；19 个会话、3321 条活动、1 个模型配置、10 条提示词版本、1 个人格保留。JWT、systemd、其他 settings 和用户工具偏好均保持，三份已核实为历史默认的技能已升级。回滚根目录 `/opt/artex/_rollback-v0.2.5-yetrx.5`，第二次证据位于 `attempt-2`。
 - 随后只读 API 核验发现线上 subagents 仍保留最早 `671e406c9f2b` 版本的默认说明，早于 `.5` 首批兼容列表；不是用户自定义。`.6` 补齐该完整旧默认及 control label 的「read 指定一个子任务」旧说明。已遍历 main 中该文件所有历史文案版本核对，独立 PostgreSQL 重新通过所有上述测试，覆盖最早与后续两类 label 文案，仍不覆盖自定义内容。
 
-`.6` 的发布与最终线上核验结果将在完成后补充。
+最终发布源码 `a55d659a5345b256b47c2a6a16e160c6a5d11314` 已推送并发布 [v0.2.5-yetrx.6](https://github.com/zhyx111999/YETRX/releases/tag/v0.2.5-yetrx.6)。Actions `38548680079` 前端、五平台、release 全部成功，Docker 按配置跳过。
+
+- Linux amd64 ZIP SHA256 `56682d743c4de77df9984cc666be755bb94bd8012d0f7855e7a6a5a1bb4217ee` 按发布 SHA256SUMS 校验；线上二进制 SHA256 `83fd434cbfab252c7fe57b3914ba62a57025f7e590948aa0dcb5c6cde5f0fb30` 与发布资产一致。健康版本 `0.2.5-yetrx.6`，systemd active。
+- `.6` 部署前后再次核对当次 48 张受保护表、5986 个文件及 SQLite 索引逻辑内容；19 会话、3321 活动、1 模型配置、10 提示词版本、1 Persona 均保持。tools 的唯一变化是已核实的最早默认 subagents 描述和 control label 文案；其他描述/schema/默认值/绑定/开关、JWT、systemd、settings 均保留，技能文件不再改动。回滚备份 `/opt/artex/_rollback-v0.2.5-yetrx.6` 含原 `.5` 二进制、数据库 dump、SQLite 一致性备份和核验记录。
+- 最终线上真实 API/页面只读核验通过：五种工具的新默认说明、control label、子代理 schema 不含独立 llm_profile_id、两种探索角色显示名；桌面 1440px 与手机 390px 的设置、探索列表和真实已有探索会话展示正确，无 API 写操作、页面运行错误或横向溢出。文件发送上限按当次用户设置保留，没有按旧验收的 128 MiB 回填。桌面会话列表本就常显、其折叠按钮只在移动端使用，浏览器脚本按断点检查。
+- 独立测试数据库/角色 `yetrx_terms_20261014_test`、临时 DSN、远端测试二进制/发布暂存、本机操作目录及本轮前端构建缓存已清理；上述生产回滚备份保留。
 
 ## v0.2.5-yetrx.4：可配置的 Agent 文件大小上限
 
