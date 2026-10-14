@@ -217,6 +217,45 @@ func TestConversationStreamDeliversPartialTextAndReconnectsWithoutDuplicatingThe
 	}
 }
 
+func TestConversationStreamStepBoundariesClearDraftsAndUsageKeepsThem(t *testing.T) {
+	s, e, _, conv := newNativeWorkflowServer(t)
+	stream, closeStream := s.beginConversationStream(conv.ID, "agent")
+	defer closeStream()
+	stream.delta("text", "\n\n")
+	if s.conversationStreamState(conv.ID).draft != nil {
+		t.Fatal("whitespace-only output created an empty bubble")
+	}
+	if err := stream.append(e.pg, conv.ID, db.Activity{Kind: "tool_use", Tool: "Read", Detail: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	stream.delta("text", "new answer")
+	if err := stream.append(e.pg, conv.ID, db.Activity{Kind: "usage"}); err != nil {
+		t.Fatal(err)
+	}
+	state := s.conversationStreamState(conv.ID)
+	if state.draft == nil || state.draft.Detail != "new answer" {
+		t.Fatalf("tool boundary retained whitespace or usage cleared the answer: %+v", state.draft)
+	}
+	// The FK failure represents a step that could not be committed. Its draft
+	// must still end at the same capture boundary before a later step starts.
+	if err := stream.append(e.pg, -1, db.Activity{Kind: "text", Detail: "new answer"}); err == nil {
+		t.Fatal("expected the missing conversation to reject the write")
+	}
+	if s.conversationStreamState(conv.ID).draft != nil {
+		t.Fatal("failed persistence retained a stale draft")
+	}
+	stream.delta("text", "after failed write")
+	if got := s.conversationStreamState(conv.ID).draft.Detail; got != "after failed write" {
+		t.Fatalf("next step inherited stale text: %q", got)
+	}
+	if err := e.pg.DeleteConversation(conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.readConversationStream(conv.ID, 0); err == nil {
+		t.Fatal("deleted conversation retained an unreadable durable cursor")
+	}
+}
+
 func TestConversationStreamCancellationRetainsPartialTextAndClearsTheDraft(t *testing.T) {
 	s, _, _, conv := newNativeWorkflowServer(t)
 	provider := &conversationStreamProvider{chunks: make(chan string, 1)}

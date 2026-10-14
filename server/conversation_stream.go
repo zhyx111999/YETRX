@@ -44,16 +44,18 @@ func (p *conversationStream) append(pg *db.DB, id int64, activity db.Activity) e
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	seq, err := pg.AppendConvActivity(id, activity)
-	if err != nil {
-		return err
+	if err == nil {
+		p.cursor = seq
 	}
-	p.cursor = seq
-	if activity.Kind == "text" || activity.Kind == "thinking" || activity.Kind == "result" {
+	// Capture flushes before every step except usage, including tool boundaries
+	// after whitespace-only output. A failed write must not join the next step's
+	// text onto the previous draft either.
+	if activity.Kind != "usage" {
 		p.text.Reset()
 		p.draft = ActivityDTO{}
 	}
 	p.revision++
-	return nil
+	return err
 }
 
 type conversationStreamState struct {
@@ -74,8 +76,10 @@ func (s *Server) conversationStreamState(id int64) conversationStreamState {
 		if p.text.Len() != 0 {
 			draft := p.draft
 			draft.Detail = p.text.String()
-			draft.Summary = firstLine(draft.Detail, 200)
-			state.draft = &draft
+			if strings.TrimSpace(draft.Detail) != "" {
+				draft.Summary = firstLine(draft.Detail, 200)
+				state.draft = &draft
+			}
 		}
 		p.mu.Unlock()
 	}
