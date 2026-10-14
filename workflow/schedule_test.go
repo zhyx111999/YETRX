@@ -49,13 +49,13 @@ func TestJobCarriesOwnerAndDepth(t *testing.T) {
 		jobs <- job
 		return "ok", nil
 	})
-	id, err := e.m.Start("conv-9", "main", 1, []Task{{Label: "a", Task: "go", AgentKey: "k"}})
+	id, err := e.m.Start("conv-9", "main", 0, []Task{{Label: "a", Task: "go", AgentKey: "k"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := <-jobs
 	e.next()
-	if job.RunID != id || job.OwnerSession != "conv-9" || job.OwnerAgent != "main" || job.Depth != 2 ||
+	if job.RunID != id || job.OwnerSession != "conv-9" || job.OwnerAgent != "main" || job.Depth != 1 ||
 		job.Task.Label != "a" || job.Task.AgentKey != "k" {
 		t.Errorf("job = %+v", job)
 	}
@@ -160,7 +160,7 @@ func TestStop(t *testing.T) {
 	id := e.start("conv-1", task("quick"), task("slow"), task("after", "slow"), task("after-quick", "quick"))
 	eventually(t, "quick tasks done", func() bool {
 		r := e.status("conv-1", id)
-		return byLabel(t, r, "quick").Status == Succeeded && byLabel(t, r, "after-quick").Status == Succeeded
+		return p.called("slow") == 1 && byLabel(t, r, "quick").Status == Succeeded && byLabel(t, r, "after-quick").Status == Succeeded
 	})
 
 	r, err := e.m.Stop("conv-1", id)
@@ -222,8 +222,8 @@ func TestResumeKeepsSuccessesAndRerunsTheRest(t *testing.T) {
 		return "done-" + job.Task.Label, nil
 	}))
 	id := e.start("conv-1", task("quick"), task("slow"), task("after", "slow", "quick"))
-	eventually(t, "quick done", func() bool {
-		return byLabel(t, e.status("conv-1", id), "quick").Status == Succeeded
+	eventually(t, "quick done and slow executing", func() bool {
+		return p.called("slow") == 1 && byLabel(t, e.status("conv-1", id), "quick").Status == Succeeded
 	})
 	if _, err := e.m.Resume("conv-1", id); !errors.Is(err, ErrRunning) {
 		t.Fatalf("Resume of a running run = %v, want ErrRunning", err)

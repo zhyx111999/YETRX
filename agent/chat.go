@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
-	"os"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
@@ -14,6 +16,11 @@ import (
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
+)
+
+var (
+	ErrChatEmpty    = errors.New("subagent completed without assistant text")
+	ErrChatRollback = errors.New("thread transcript rollback failed")
 )
 
 // ChatAgent is the generic, task-independent conversational runner behind the chat
@@ -131,10 +138,11 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		ws.Enabled = false
 	}
 
-	// Per-session working directory: <workDir>/sessions/<sessionID>/
-	// Isolates file writes across conversations, mirroring how workers use i<intentID>/.
-	sessionWorkDir := filepath.Join(c.workDir, "sessions", sessionID)
-	_ = os.MkdirAll(sessionWorkDir, 0o755)
+	control := chatControlFrom(ctx)
+	sessionWorkDir, err := controlledWorkDir(c.workDir, sessionID, control)
+	if err != nil {
+		return "", err
+	}
 	ctx = intercept.WithReviewWorkingDirectory(ctx, sessionWorkDir)
 
 	// Pure assistant: DefaultTools as the base; AugmentTools layers in the key's
@@ -144,6 +152,9 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
+	if control.Child {
+		tools, def = childTools(tools, def)
+	}
 
 	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
 	appendSystem := make([]string, 0, 2)
@@ -189,12 +200,15 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		Todos:                 actool.NewTodoStore(),
 		// large tool output spills to cmd-output/ under the session dir.
 		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
-		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
+		ToolOutputDir: filepath.Join(c.workDir, "sessions", sessionID, "cmd-output"),
 		// 命中预算(步数)→ SDK 跑收尾:输出一句总结。Prompt 与收尾轮数按本 agent key 后台可编辑
 		// (自定义 agent 各自一份;留空/0 用通用默认:10 轮)。
 		Settlement:   wrapupSettlement(agentKey, nil),
 		NonStreaming: c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
+	}
+	if control.Child {
+		opts.DisallowedTools = []string{"subagents", "subagents_control"}
 	}
 	if c.guard != nil {
 		opts.Hooks = c.guard.Hooks()
@@ -204,9 +218,20 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		opts.SessionID = sessionID
 	}
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
-	enableNoa(&opts, c.noaEnabledFn, c.workDir, "chat-"+sessionID, noaWarn("chat-"+sessionID))
+	// Named threads use reconstructable raw transcripts, including rollback.
+	// Noa's external archive has no rewind API, so these threads use standard compaction.
+	if !control.RollbackOnError {
+		enableNoa(&opts, c.noaEnabledFn, c.workDir, "chat-"+sessionID, noaWarn("chat-"+sessionID))
+	}
+	var rollback func() error
+	if control.RollbackOnError && c.tx != nil {
+		rollback, err = transcriptRollback(c.tx.MainPath(sessionID))
+		if err != nil {
+			return "", err
+		}
+	}
 	ctx = attachSideCapture(ctx, &opts)
-	s := agentcore.NewSession(opts)
+	s, captureSession := controlledSession(opts, control)
 	defer s.Close()
 	// reload prior conversation so the agent has context across turns (each Chat is
 	// a fresh session). First turn: no file yet → Resume loads nothing and proceeds.
@@ -216,11 +241,22 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// re-unlock skill-gated MCPs from prior Skill() calls in the reloaded history so
 	// revealed tools stay callable across the fresh session.
 	seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
-	text, _, err := captureRunSession(ctx, s, message, func(r db.Activity) {
+	text, _, err := captureRunSession(ctx, captureSession, message, func(r db.Activity) {
 		if emit != nil {
 			r.Worker = agentKey
 			emit(r)
 		}
 	})
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if control.RollbackOnError && err == nil && strings.TrimSpace(text) == "" {
+		err = ErrChatEmpty
+	}
+	if rollback != nil && err != nil {
+		if rollbackErr := rollback(); rollbackErr != nil {
+			return text, fmt.Errorf("%w: %v; original error: %v", ErrChatRollback, rollbackErr, err)
+		}
+	}
 	return text, err
 }

@@ -622,6 +622,7 @@ export type ActivityKind =
   | "thinking"
   | "result"
   | "user"
+  | "file" // Agent-sent downloadable attachment
   | "intent" // LLM-generated exploration objective leading a worker session (UI-synthesized)
   | "round" // planner round boundary marker (engine-emitted)
   | "usage" // live cumulative token usage (per model turn); not rendered
@@ -635,6 +636,15 @@ export interface ChatAttachment {
   path: string;
   size: number;
   abs?: string; // 绝对路径(scope=staging 暂存上传时返回;建任务前把它写进描述)
+}
+
+export interface ChatFile {
+  id: string;
+  conversation_id: number;
+  name: string;
+  size: number;
+  mime_type: string;
+  sha256: string;
 }
 
 export interface Activity {

@@ -8,7 +8,9 @@ import (
 	"time"
 )
 
-const wait = 5 * time.Second
+// Durable Windows writes can stall under the filesystem scanner. This only
+// bounds test polling; production attempt and stop deadlines are unchanged.
+const wait = 20 * time.Second
 
 // env is a Manager under test plus the completions it reported.
 type env struct {
@@ -61,6 +63,11 @@ func (e *env) next() Run {
 	case r := <-e.done:
 		return r
 	case <-time.After(wait):
+		e.m.mu.Lock()
+		for _, entry := range e.m.runs {
+			e.t.Logf("stalled run %s: status=%s launched=%v stopping=%t tasks=%+v", entry.run.ID, entry.run.Status, entry.launched, entry.stopping, entry.run.Tasks)
+		}
+		e.m.mu.Unlock()
 		e.t.Fatal("no completion notification")
 		return Run{}
 	}

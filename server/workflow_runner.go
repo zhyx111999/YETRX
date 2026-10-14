@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/workflow"
@@ -18,6 +19,9 @@ import (
 func (s *Server) initWorkflows() {
 	if s.m.pg == nil {
 		return
+	}
+	if err := s.upgradeWorkflowSchemas(); err != nil {
+		log.Printf("[workflow] tool schema upgrade: %v", err)
 	}
 	manager, err := workflow.New(s.ctx, filepath.Join(s.m.dir, "workflows"), workflow.DefaultConcurrency, s.runWorkflowTask, s.workflowCompleted)
 	if err != nil {
@@ -60,7 +64,7 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 		return "", err
 	}
 	if parent == nil {
-		return "", fmt.Errorf("parent conversation no longer exists")
+		return "", workflow.Permanent(fmt.Errorf("parent conversation no longer exists"))
 	}
 	key := job.Task.AgentKey
 	if key == "" {
@@ -71,7 +75,7 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 		return "", err
 	}
 	if mode == nil || !mode.Enabled {
-		return "", fmt.Errorf("mode %q is unavailable", key)
+		return "", workflow.Permanent(fmt.Errorf("mode %q is unavailable", key))
 	}
 	// A workflow task inherits the exact ChatAgent selected by its parent
 	// conversation. Its AgentKey still controls the child prompt/tools, but the
@@ -79,16 +83,14 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 	// session. Subtasks have no separate model override.
 	ca := s.resolveChatAgent(parent)
 	if ca == nil {
-		return "", fmt.Errorf("%s", s.chatUnavailableReason())
+		return "", workflow.Permanent(fmt.Errorf("%s", s.chatUnavailableReason()))
 	}
-	digest := sha256.Sum256([]byte(job.Task.Label))
-	session := fmt.Sprintf("workflow-%s-%x", job.RunID, digest[:8])
-	workspace, err := filepath.Abs(filepath.Join(s.m.dir, "sessions", job.OwnerSession))
-	if err != nil {
-		return "", err
-	}
+	session := job.SessionID
 	var prompt strings.Builder
-	fmt.Fprintf(&prompt, "%s\n\n父对话工作目录：%s\n本任务有独立工作目录；修改共享项目时先创建独立副本，最终说明实际操作、依据和结果，供主对话审查。", job.Task.Task, workspace)
+	fmt.Fprintf(&prompt, "%s\n\n当前源码工作目录：%s\n最终说明实际操作、依据、文件和命令、测试结果、失败及未验证项，供主对话审查。", job.Task.Task, job.CWD)
+	if job.Task.Isolation == "worktree" {
+		prompt.WriteString("本任务已创建独立 Git worktree；不要自动合并，报告工作树路径、分支和提交。")
+	}
 	for _, label := range job.Task.DependsOn {
 		fmt.Fprintf(&prompt, "\n\n<dependency label=%q>\n%s\n</dependency>", label, job.Results[label])
 	}
@@ -99,7 +101,14 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 			log.Printf("[workflow %s] activity: %v", job.RunID, err)
 		}
 	}
-	return ca.Chat(ctx, key, session, prompt.String(), mode.MaxTurns, time.Duration(mode.RunSecs)*time.Second, mode.WebSearch, emit)
+	ctx = agent.WithChatControl(ctx, agent.ChatControl{WorkingDirectory: job.CWD, Child: true, DrainMessages: job.Messages.Drain, RollbackOnError: job.Task.Thread != ""})
+	text, err := ca.Chat(ctx, key, session, prompt.String(), mode.MaxTurns, time.Duration(mode.RunSecs)*time.Second, mode.WebSearch, emit)
+	if errors.Is(err, agent.ErrChatBudget) || errors.Is(err, agent.ErrChatRollback) {
+		err = workflow.Permanent(err)
+	} else if errors.Is(err, agent.ErrChatEmpty) {
+		err = &workflow.Failure{Code: "AGENT_EMPTY_OUTPUT", Recoverable: true, Cause: err}
+	}
+	return text, err
 }
 
 // WaitBackground lets the native runner finish cancellation before its stores

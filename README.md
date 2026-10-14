@@ -35,9 +35,33 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 
 独立任务并行，有依赖的任务按顺序执行；前置任务失败时后续任务标记 blocked。启动立即返回 `run_id`，完成后结果自动回到根对话；当前对话正在运行时等待它结束后汇总。停止对话同时取消其后台任务和未执行的自动回复。
 
-控制动作：`list`、`status`、`read`、`stop`、`resume`。`read` 一次读取一个 label，最多末尾 8000 字符。默认全局并发 4、每批最多 32 项、最多 3 层嵌套。状态保存在数据目录的 `workflows/`，服务重启将未完成任务标记 interrupted，不会自动重复执行；resume 保留成功项，只重试其他项。
+控制动作：`list`、`status`、`read`、`stop`、`resume`、`message`。`read` 一次读取一个 label，最多末尾 8000 字符。默认全局并发 4、每批最多 32 项；子代理硬性禁止再次派发或控制子代理。状态保存在数据目录的 `workflows/`。
+
+| 机制 | 当前行为 |
+| --- | --- |
+| 运行中指令 | `message` 向正在运行的任务排队，在下次模型调用前进入同一子会话；若先结束则丢弃，不打断正在执行的工具 |
+| 恢复与编辑 | `resume` 可携带编辑后的 tasks；未变成功的一次性任务重排后仍复用，变更及其下游重跑，旧结果保留历史 |
+| 检查点 | checkpoint 步骤持久化等待；通过匹配的 checkpoint_id/response 继续，支持 JSON null；服务重启不丢等待状态 |
+| 命名会话 | thread 在一次运行内共享历史和固定 cwd；失败回合回滚，工作流恢复时重新执行 thread 回合 |
+| 自动重试 | agent_retries 默认 0、最多额外 3 次；只重试可恢复错误，必须等旧执行器退出；每次使用新的一次性会话 |
+| 额度恢复 | 提供商额度限制单独暂停，按 reset 提示和有上限的退避自动恢复，最多 5 次；手动 stop 取消定时器 |
+| 源码目录 | 默认共享运行 cwd；显式 isolation:"worktree" 创建独立 Git 分支和源码树，默认保留，不自动合并，创建失败不降级 |
+
+同次任务自动重试共享其工作树；恢复后重新执行的任务创建新工作树。`keep_worktree:false` 在执行器退出后删除该任务的工作树和分支。独立子会话不复制父完整历史。服务重启将仍运行的任务标为 interrupted，普通中断需手动恢复；resume 不恢复 Go 调用栈，也不保证工具副作用只执行一次。
+
+五项机制参照当前 `zhyx111999/pi-workflows-lean` 源码，以原生 Go/ChatAgent 实现；模型仍继承父会话，全局并发仍为 4，流程使用原生 DAG。详细契约和示例见 [workflow-authoring](skills/workflow-authoring/SKILL.md)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 三个说明技能 `workflow-authoring`、`workflow-patterns`、`subagents-setup` 位于统一 `skills/` 中，已按原生工具重写。流程使用任务依赖，不执行旧 pi 的 JavaScript 工作流脚本。没有安装 Tavily。
+
+## 会话发文件
+
+Agent 可调用全局 `send_file` 工具，将已生成的文件直接发到当前聊天。消息中显示文件名、大小和下载按钮；下载沿用现有登录认证。默认绑定 Agent 模式，可在函数工具页面调整模式绑定。
+
+```json
+{"path":"reports/result.pdf","name":"分析报告.pdf","caption":"报告已完成，可在这里下载。"}
+```
+
+相对路径按当前会话工作目录解析，也可发送绝对路径。支持普通文件，单个最多 128 MiB；目录先打包。服务端保存独立副本，源文件修改或工作树删除不会改变已发附件；删除会话会清理该会话的附件。子任务将产物路径交给主代理，由主代理审查后发送。
 
 ## 构建与运行
 

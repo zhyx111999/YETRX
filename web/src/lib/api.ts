@@ -20,6 +20,7 @@ import type {
   BatchCategoryItem,
   BatchControlItem,
   ChatAttachment,
+  ChatFile,
   CommandRecord,
   Company,
   CompanyScopeMutation,
@@ -1012,6 +1013,27 @@ export const api = {
   deleteAgent: (key: string) => del<{ deleted: string }>(`/agents/${key}`),
 
   // ---- conversations (chat page) ----
+  downloadChatFile: async (file: ChatFile) => {
+    const token = getToken();
+    const response = await fetch(
+      `/api/conversations/${file.conversation_id}/files/${encodeURIComponent(file.id)}`,
+      { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+    );
+    if (!response.ok) {
+      if (response.status === 401) throw new Error("登录已过期，请重新登录后下载");
+      throw new Error(response.status === 404 ? "附件不存在或已随会话删除" : `下载失败: ${response.status}`);
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Allow mobile browsers time to consume the object URL after the click.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
   conversations: () => get<{ conversations: Conversation[] }>("/conversations").then((r) => arr(r.conversations)),
   createConversation: (agent_key: string, title = "", llm_profile_id?: number | null) =>
     post<Conversation>("/conversations", { agent_key, title, llm_profile_id: llm_profile_id ?? null }),

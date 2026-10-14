@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { ChatFileMessage } from "@/components/chat-file-message";
 import { Markdown } from "@/components/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,7 @@ function useInView(rootMargin = "400px"): [React.RefObject<HTMLDivElement | null
 type Group =
   | { type: "user"; key: number; step: Activity; intent?: boolean }
   | { type: "answer"; key: number; step: Activity }
+  | { type: "file"; key: number; step: Activity }
   | { type: "round"; key: number; label: string }
   | { type: "tool"; key: number; worker: string; use?: Activity; result?: Activity }
   | { type: "msg"; key: number; worker: string; steps: Activity[] }
@@ -89,6 +91,10 @@ function groupSteps(steps: Activity[], chat: boolean): Group[] {
   const byToolId = new Map<string, Extract<Group, { type: "tool" }>>();
   for (const s of steps) {
     if (s.kind === "usage") continue; // live token-usage marker — not a rendered step
+    if (s.kind === "file") {
+      out.push({ type: "file", key: s.seq, step: s });
+      continue;
+    }
     if (s.kind === "round") {
       out.push({ type: "round", key: s.seq, label: s.summary || "新一轮" }); // planner round boundary
       continue;
@@ -707,6 +713,8 @@ function ExecView({
           </div>
         ) : g.type === "user" ? (
           <UserRow key={"u" + g.key} step={g.step} intent={g.intent} getDetail={getDetail} />
+        ) : g.type === "file" ? (
+          <ChatFileMessage key={"f" + g.key} step={g.step} getDetail={getDetail} />
         ) : g.type === "answer" ? (
           <AnswerBlock key={"a" + g.key} step={g.step} getDetail={getDetail} />
         ) : g.type === "tool" ? (

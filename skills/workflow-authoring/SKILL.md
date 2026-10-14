@@ -1,28 +1,55 @@
 ---
 name: workflow-authoring
-description: 设计原生后台子任务的并行分工、依赖顺序和结果审查；使用全局 subagents 工具。
+description: 设计原生后台子任务的并行、依赖、运行中指令、恢复与源码工作树，使用全局 subagents 工具。
 ---
 
 # 原生工作流
 
-所有任务使用平台已有的对话模式、模型配置、全局工具、技能和 MCP。通过 `subagents` 的 `tasks` 数组描述流程：
+任务使用平台已有的 ChatAgent、模型解析链、全局工具、技能和 MCP。用户要求直接完成时不要派发子代理。流程用 tasks/depends_on 表达，不执行 pi JavaScript 脚本。
 
 ```json
 {
+  "cwd": "/path/to/project",
+  "agent_retries": 1,
+  "agent_timeout_ms": 120000,
   "tasks": [
-    {"label": "inspect", "task": "检查指定源码，说明问题和证据。只读。"},
-    {"label": "design", "task": "根据 inspect 的结果给出最小修改方案。", "depends_on": ["inspect"]},
-    {"label": "review", "task": "独立复核设计、风险及验证步骤。", "depends_on": ["design"]}
+    {"label":"inspect","task":"只读检查指定文件，输入、范围及预期结果必须写全。"},
+    {"label":"implement","task":"根据检查结果实现约定修改；报告分支、文件、提交、命令及测试结果。","depends_on":["inspect"],"isolation":"worktree"}
   ]
 }
 ```
 
-- 无依赖的任务并行执行；`depends_on` 指向同批次的 label。依赖全部成功后才启动，结果会作为上下文交给后续任务。
-- label 在本批次内唯一。每批最多 32 项，依赖不能成环。默认同时执行 4 个子任务，所有模式共用并发额度。
-- `agent_key` 可选择全局模式，省略则沿用当前模式。子任务自动使用启动它的当前对话的 ChatAgent，因此继承同一模型配置解析结果、全局工具、技能和 MCP；任务不接收单独的 LLM 配置。
-- 子任务有独立会话和工作目录，仍以平台服务用户访问宿主机。涉及源码修改时先在独立副本完成，提交实际修改和验证结果，主对话审查后再集成。
-- 完整交代输入位置、任务边界和预期结果。最终报告应写清实际操作、理由、证据、失败和未完成项。
-- 启动立即返回 `run_id`；后台结束会自动回传根对话，无须反复查询。
-- 原生流程使用上述任务依赖，不执行 pi 的 JavaScript `agent()/parallel()/pipeline()` 脚本。
+- label 唯一，每批最多 32 项，依赖不能成环。独立项并行，依赖全部成功后启动；依赖结果显式交给后续任务。全局共用 4 个执行槽，与探索引擎 Work Agent 数独立。
+- agent_key 只选择提示词和资源可见性。模型始终继承父对话当前实际 ChatAgent，没有子任务模型覆盖。
+- 默认共享运行 cwd，省略运行 cwd 时使用父会话目录；任务 cwd 可选择其他已存在目录。不同一次性任务/重试使用独立子会话，不自动继承父历史。
+- isolation:"worktree" 从运行 cwd 所在 Git 仓库 HEAD 创建独立分支和工作树。不会复制父目录未提交修改，不自动合并；默认保留供主代理审查，keep_worktree:false 在执行器退出后移除工作树和分支。创建失败终止任务，不退回共享目录。任务 cwd、thread 均不能与 isolation 同时使用。
+- thread 用于同次运行内连续对话；相同 thread 的任务必须通过 depends_on 串行，并保持相同 canonical cwd。失败回合恢复前一 transcript，失败后缀另存审计。恢复整个工作流时，thread 任务重新执行，旧成功 thread 回合不作为可复用值。
+- agent_retries 默认 0，上限 3，表示额外次数。只重试可恢复错误，退避 250/500/1000ms；必须等待旧执行器退出。取消、配置错误、checkpoint 和额度暂停不作为普通重试。
+- agent_timeout_ms 默认 0，不额外设置硬超时；模式原有轮次和时间预算仍适用。超时/取消后给执行器 10 秒退出宽限；仍未退出时标记 draining、禁止重试和恢复，保留槽及工作树直到真正退出。
+- 子会话硬排除 subagents、subagents_control，包括延迟工具调用入口；服务端和调度器再次拒绝嵌套派发。
 
-用 `subagents_control` 的 `status` 查看状态、`read` 读取一个子任务结果、`stop` 停止、`resume` 重试未完成部分。恢复会保留成功项；重试前先检查部分执行产生的改动。
+# 控制和恢复
+
+启动立即返回 run_id；结束或暂停会自动回传。status 查看状态、尝试记录、源码目录、分支和检查点；read 一次读取一个 label，最多末尾 8000 字符。
+
+```json
+{"action":"message","run_id":"wf-...","label":"implement","text":"新增范围约束：只修改指定模块，并报告未验证项。"}
+```
+
+message 只向实际运行的子任务排队，在下一次模型调用前写入其会话；当前模型请求与工具不被打断。子任务先结束则丢弃尚未送达的消息，不在重试时重放。
+
+```json
+{"action":"resume","run_id":"wf-...","tasks":[{"label":"inspect","task":"保持原任务原文。"},{"label":"implement","task":"这里填写修订后的完整任务。","depends_on":["inspect"],"isolation":"worktree"}]}
+```
+
+resume 接受 failed、stopped、interrupted、paused；携带 tasks 时也可编辑已完成运行。未变且成功的一次性任务即使重排也会复用；变更、删除及其依赖结果失效，旧结果留在历史。失败任务重新执行，不能假设恢复到某条工具调用的精确断点。每次新的 worktree 执行创建新路径；同一次执行的自动重试共享原工作树。
+
+显式检查点用一个只含 checkpoint 的步骤表示：
+
+```json
+{"tasks":[{"label":"review-gate","checkpoint":{"checkpoint_id":"review-1","kind":"review","payload":{"summary":"待审查修改"}}},{"label":"continue","task":"依据 review-gate 的响应继续。","depends_on":["review-gate"]}]}
+```
+
+运行持久化并暂停；用 `{"action":"resume","run_id":"wf-...","checkpoint_id":"review-1","response":{"approved":true}}` 回答。response 可以是任意 JSON，包括 null；必须匹配当前 ID。等待回答时不能同时编辑 tasks。服务重启仍保留等待项和已经完成的结果。
+
+提供商额度/速率限制单独暂停，按 reset 提示、指数退避与 ±10% 抖动自动恢复；默认约 5 分钟，最少 1 分钟、最多 6 小时，每轮最多 5 次。次数和计划时间可在 status 查看；冷启动续用计数。手动 resume 重置这一轮计数，stop 取消定时器。普通 interrupted 不自动执行。

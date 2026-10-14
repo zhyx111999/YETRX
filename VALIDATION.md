@@ -1,12 +1,43 @@
 # 验证记录
 
-## 全局人格与原生后台工作流模型继承（源码 e91ab24，待发布）
+## v0.2.5-yetrx.3：原生工作流机制与 Agent 文件交付
+
+2026-10-14，发布前验收已完成。源码继续使用 Go `workflow.Manager`、`ChatAgent` 和现有 Norma API；本次未修改 Norma，未恢复 JavaScript runtime。
+
+- 对照当前安装的 `@zhyx111999/pi-workflows-lean` 实现运行中消息、编辑/重排恢复、按身份与依赖复用结果、命名 thread、持久化 checkpoint、可恢复错误重试、有限额度恢复和 Git worktree 生命周期。取消/超时后的旧执行器必须真正退出；draining 期间保留槽位并禁止重叠重试/恢复。
+- 子代理工具注册、延迟调用与服务端深度检查共同禁止再次编排。任务仍继承父对话当前实际模型；全局并发 4、单批最多 32，探索引擎 `workers` 独立。
+- 既有实例的工具 schema 一次性升级覆盖新的控制参数，保留用户描述、嵌套参数默认值、绑定和开关；真实 PostgreSQL 测试覆盖升级、用户修改保留和幂等。
+- `send_file` 将现有普通文件（最多 128 MiB）复制为当前会话的可下载附件。API 沿用 JWT，校验会话归属，支持 Range，强制附件下载；删除会话清理副本。测试覆盖中文名称、字节保留、源文件变化、无认证/错误归属、大小与类型限制。
+- Linux Go 1.26.5、CGO/gcc 下：`go test -race ./workflow -count=1`、ChatAgent steering/子工具约束/thread/Persona 聚焦 race、服务器 NativeWorkflow/History/Persona/ChatFile/WorkflowSchemaUpgrade 集成 race 全部通过。集成测试使用独立数据库 `yetrx_parity_20261014`，生产数据库未写入测试数据。
+- 真实 `gpt-6-astra` 的受限验收 `TestNativeWorkflowLiveParity` 通过：run `wf-69d84a923e1ba614`；2 次任务尝试，包含一次受控 recoverable 失败；总 8 次 provider 调用。按本次子会话 ID 核对 `llm_records.raw_request` 的 4 次真实 HTTP 请求均为 Astra；指令实际改变 worktree 文件，父源码保持原文；恢复复用、checkpoint JSON null 和禁止再次派发通过。主代理随后实际生成文件并调用 `send_file`，附件内容匹配。
+- Windows 全仓库编译、受影响包 `go vet`、TypeScript、前端生产静态导出、新组件 Biome 检查通过；`git diff --check` 通过。
+- Edge 桌面 1440px 与移动 390px 浏览器测试通过：使用生产构建和受控 API fixture，附件卡片可见，实际点击下载，认证请求头、中文名和文件字节一致，移动按钮 44px，无横向溢出或页面运行错误。后端真实 HTTP/数据库行为另由上述集成测试验证。
+
+边界：YETRX 提供原生任务 DAG，不执行任意 pi JavaScript 工作流；恢复不保证外部副作用恰好一次。运行中消息在下一模型边界送达，提前结束则丢弃。默认共享 cwd，显式 worktree 才隔离；默认保留工作树，不自动合并。重试默认 0、最多额外 3 次；额度自动恢复有上限。长上下文耗尽后的无限续跑未验收。全仓库历史环境/基线问题见下文，不将聚焦检查描述成所有历史测试全绿。
+
+部署完成后在本节追加 release、资产校验及生产完整性结果。
+
+
+## 全局人格与原生后台工作流模型继承：v0.2.5-yetrx.2
+
+最终发布源码 `98f20e0`，后端基线 `0975ce8`；健康版本 `0.2.5-yetrx.2`。侧边栏和页内标题统一为「LLM 与人格」。完整对照答复与实际执行结果保存在本地忽略文档 `docs/YETRX-额外问题答复与验收.md`，该文档未纳入 Git 发布。
+
+- GitHub Actions `38516185786` 的前端、五个平台构建及 release 全部通过；Linux amd64 发布资产按 SHA256SUMS 校验后部署，二进制 SHA256 为 `7c9f6d5f07bce3b2952cdd1d9de79a5dff799767973756d6a27618ddcbc57b11`。
+- `.2` 部署前后 14 个对话、3907 条活动、3 个模型配置、10 条提示词版本和 Persona 表逐行指纹一致，JWT 密钥和 systemd 单元一致。回滚副本 `/opt/artex/_rollback-v0.2.5-yetrx.2` 保留旧二进制、数据库 dump 与指纹记录。
+- Edge 线上浏览器验证导航和标题「LLM 与人格」、人格创建抽屉、字段及系统设置页，无页面运行错误。
+- 独立 PostgreSQL 库执行 `TestPersonaSchemaAndCRUD`、`TestConcurrentPersonaActivationKeepsSingleActive` 和 `TestPersonaRoutesCRUDActivationAndDTO` 全部通过，无 skip；覆盖 24 次并发激活、幂等 schema、原文保留、CRUD、冲突/空白/缺失错误及 DTO。
+- 相同二进制的隔离服务使用真实 `gpt-6-astra` 执行 `wf-2d3e530f052dc7fa`：两个子任务实际并行，第三个等待两项依赖成功后启动，完成后自动回灌主会话。6 次请求的模型记录与 HTTP 请求体均为 `gpt-6-astra`；人格完整正文仅出现在请求 system，未写入 transcript。
+- 同一临时会话编辑激活人格后，第 7 次请求使用新人格，回复确认改变，服务未重启。临时服务、数据库、角色、工作流和会话文件均已清理。
+- 先前生产临时会话 29 的宽范围审查任务长时间未收尾，已停止并删除其临时资源，不计作通过。真实 `llm_usage` 账本因缺少 session_id 未按时间猜测删除。
+- 自更新回源实际遇到 GitHub 匿名 API 限流，HTTP 200 内含 error，不计为线上更新检查成功；本次通过校验 release 资产手工部署。真实长上下文耗尽/无限续跑和本版本 race 未验收。
+
+此前完成的源码检查：
 
 - 新增独立全局人格表、唯一名称、最多一个激活项、并发安全激活、CRUD API 和系统 LLM 设置页管理；激活人格在每次 `ChatAgent` 请求边界动态读取，保留原始用户消息、活动和 transcript。
 - 原生 `subagents` 子任务沿用启动它的当前会话 ChatAgent 和模型配置；任务 `agent_key` 只决定提示词与资源可见性，不提供子任务级 `llm_profile_id` 覆盖。依赖结果、独立子任务 transcript/工作目录、后台自动回灌和 `Resume` 保留。
 - 父代理提示仅在人类回合显式标记、且当前模式实际暴露 `subagents` 时追加；子任务不继承该标记。自更新版本比较支持 `vX.Y.Z-yetrx.N`，开发构建后缀仍不可比较。
 - `go test ./... -run '^$'`、`go vet ./agent ./db ./selfupdate ./server ./workflow`、核心聚焦测试、`npx tsc --noEmit --pretty false` 和 Next 生产构建通过；`go test -race ./workflow` 因当前 Windows Go 环境没有可用 C 编译器未运行。
-- Persona 测试在本机没有 `ARTEX_PG_DSN` 时自然跳过 PostgreSQL 集成分支；完整 `go test ./server` 仍复现既有无数据库配置失败与 Windows `skillRelPath` 路径分隔符断言失败。
+- Windows 本机没有 `ARTEX_PG_DSN` 时 PostgreSQL 分支自然跳过；后续已在服务器独立临时 PostgreSQL 库实际通过 Persona 集成测试。完整 `go test ./server` 的既有无数据库配置失败与 Windows `skillRelPath` 路径分隔符问题仍未宣称修复。
 
 ## 设置面板按钮动效：v0.2.4-yetrx.1
 

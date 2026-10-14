@@ -16,7 +16,9 @@ func (m *Manager) launch(e *entry) {
 	e.ctx, e.cancel = context.WithCancel(m.ctx)
 	e.done = make(chan struct{})
 	e.launched = make(map[string]bool)
-	e.stopping = false
+	e.stopping, e.pausing = false, false
+	e.mailboxes = make(map[string]*Mailbox)
+	e.threads = make(map[string]threadState)
 	m.advance(e)
 }
 
@@ -24,11 +26,19 @@ func (m *Manager) launch(e *entry) {
 // dependencies all succeeded, and settles the run once nothing is in flight.
 // Callers persist afterwards.
 func (m *Manager) advance(e *entry) {
-	if !e.stopping && m.ctx.Err() == nil {
+	if !e.stopping && !e.pausing && m.ctx.Err() == nil {
 		e.blockFailed()
 		for i := range e.run.Tasks {
 			t := &e.run.Tasks[i]
 			if t.Status == Pending && !e.launched[t.Label] && e.ready(t) {
+				if t.Checkpoint != nil {
+					t.Status = Paused
+					e.run.Checkpoint = &Checkpoint{CheckpointInput: *t.Checkpoint, Label: t.Label, Status: "waiting", CreatedAt: time.Now()}
+					e.run.PauseReason = "checkpoint"
+					e.pausing = true
+					e.cancel()
+					break
+				}
 				e.launched[t.Label] = true
 				m.wg.Add(1)
 				go m.execute(e, e.ctx, t.Label)
@@ -57,14 +67,26 @@ func (m *Manager) settle(e *entry) {
 		if e.stopping && (t.Status == Pending || t.Status == Running) {
 			t.Status, t.Error, t.FinishedAt = Stopped, "stopped", now
 		}
+		if e.pausing && t.Status == Running {
+			t.Status = Pending
+		}
 		if t.Status != Succeeded {
 			status = Failed
 		}
+	}
+	if e.pausing {
+		status = Paused
 	}
 	if e.stopping {
 		status = Stopped
 	}
 	e.run.Status, e.run.FinishedAt = status, now
+	if status == Paused && e.run.PauseReason == "usage_limit" {
+		m.armQuotaResume(e, true)
+	} else {
+		m.cancelQuotaTimer(e)
+	}
+	m.persist(e)
 	m.notify(e.run)
 }
 
@@ -81,53 +103,11 @@ func (m *Manager) interrupt(e *entry) {
 	m.notify(e.run)
 }
 
-// execute is the goroutine of one task: wait for a global slot, run, record.
-func (m *Manager) execute(e *entry, ctx context.Context, label string) {
-	defer m.wg.Done()
-	var (
-		result string
-		err    error
-	)
-	select {
-	case m.sem <- struct{}{}:
-		if job, ok := m.begin(e, ctx, label); ok {
-			result, err = m.call(ctx, job)
-		} else {
-			err = ctx.Err()
-		}
-		<-m.sem
-	case <-ctx.Done():
-		err = ctx.Err()
-	}
-	m.complete(e, label, result, err)
-}
-
-// begin marks the task running (saved, so a crash shows what was in flight) and
-// builds its Job. It reports false if the run was cancelled in the meantime.
-func (m *Manager) begin(e *entry, ctx context.Context, label string) (Job, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if ctx.Err() != nil {
-		return Job{}, false
-	}
-	t := &e.run.Tasks[e.idx[label]]
-	t.Status, t.StartedAt = Running, time.Now()
-	m.persist(e)
-	job := Job{
-		RunID: e.run.ID, OwnerSession: e.run.OwnerSession, OwnerAgent: e.run.OwnerAgent,
-		Depth: e.run.Depth + 1, Task: cloneTasks([]Task{*t})[0],
-		Results: make(map[string]string, len(t.DependsOn)),
-	}
-	for _, d := range t.DependsOn {
-		job.Results[d] = e.run.Tasks[e.idx[d]].Result
-	}
-	return job, true
-}
-
+// call contains a runner panic inside the task's failure boundary.
 func (m *Manager) call(ctx context.Context, job Job) (result string, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			err = fmt.Errorf("panic: %v", p)
+			err = Permanent(fmt.Errorf("panic: %v", p))
 		}
 	}()
 	return m.runner(ctx, job)
@@ -143,15 +123,22 @@ func (m *Manager) complete(e *entry, label, result string, err error) {
 	switch {
 	case err == nil:
 		t.Status, t.Result, t.FinishedAt = Succeeded, result, now
-	case e.stopping || m.ctx.Err() != nil:
+	case e.stopping || e.pausing || m.ctx.Err() != nil:
 		// Cancelled from outside, not the task's fault: keep any partial text and
 		// leave the state to settle (Stop) or to the next start-up (shutdown).
 		t.Result = result
 	default:
 		t.Status, t.Result, t.Error, t.FinishedAt = Failed, result, err.Error(), now
+		if classify(err).Code == "PROVIDER_USAGE_LIMIT" {
+			t.Status, e.pausing = Paused, true
+			e.run.PauseReason, e.run.ResetHint = "usage_limit", extractResetHint(err.Error())
+			e.cancel()
+		}
 	}
 	m.advance(e)
-	m.persist(e)
+	if e.cancel != nil {
+		m.persist(e)
+	}
 }
 
 func (m *Manager) persist(e *entry) {

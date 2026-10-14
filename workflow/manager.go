@@ -32,13 +32,19 @@ type Manager struct {
 
 // entry is the live bookkeeping of one run.
 type entry struct {
-	run      Run
-	idx      map[string]int  // label -> index into run.Tasks
-	ctx      context.Context // current execution; cancel != nil while tasks are in flight
-	cancel   context.CancelFunc
-	done     chan struct{}   // closed when the current execution has drained
-	launched map[string]bool // tasks with a goroutine in flight (waiting for a slot or running)
-	stopping bool
+	run           Run
+	idx           map[string]int  // label -> index into run.Tasks
+	ctx           context.Context // current execution; cancel != nil while tasks are in flight
+	cancel        context.CancelFunc
+	done          chan struct{}   // closed when the current execution has drained
+	launched      map[string]bool // tasks with a goroutine in flight (waiting for a slot or running)
+	stopping      bool
+	pausing       bool
+	draining      int
+	mailboxes     map[string]*Mailbox
+	threads       map[string]threadState
+	quotaTimer    *time.Timer
+	quotaRefusals int
 }
 
 // New loads the runs saved in dir and returns a Manager whose work lives as long
@@ -47,7 +53,7 @@ type entry struct {
 // re-run. concurrency <= 0 means DefaultConcurrency. onComplete may be nil.
 //
 // onComplete receives a snapshot of a run each time it reaches a terminal state
-// (succeeded, failed, stopped, interrupted). It is called from its own goroutine
+// (succeeded, failed, stopped, interrupted or paused). It is called from its own goroutine
 // without any Manager lock held, so it may call back into the Manager.
 func New(ctx context.Context, dir string, concurrency int, runner Runner, onComplete func(Run)) (*Manager, error) {
 	if runner == nil {
@@ -70,12 +76,30 @@ func New(ctx context.Context, dir string, concurrency int, runner Runner, onComp
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range saved {
+		r.Revision = max(1, r.Revision)
+		r.Options.AgentRetries = min(MaxAgentRetries, max(0, r.Options.AgentRetries))
+		r.AutoResumeAttempts = min(quotaMaxAttempts+1, max(0, r.AutoResumeAttempts))
+		for i := range r.Tasks {
+			r.Tasks[i].Draining = false
+		}
 		e := newEntry(r)
 		m.runs[r.ID] = e
 		if r.Status == Running {
 			m.interrupt(e)
+		} else if r.Status == Paused && r.PauseReason == "usage_limit" {
+			m.armQuotaResume(e, false)
 		}
 	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		<-ctx.Done()
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, e := range m.runs {
+			m.cancelQuotaTimer(e)
+		}
+	}()
 	return m, nil
 }
 
@@ -84,6 +108,10 @@ func New(ctx context.Context, dir string, concurrency int, runner Runner, onComp
 // assistant; use Job.Depth inside a Runner). Tasks without DependsOn start
 // immediately, in parallel, subject to the global concurrency limit.
 func (m *Manager) Start(ownerSession, ownerAgent string, depth int, tasks []Task) (string, error) {
+	return m.StartWithOptions(ownerSession, ownerAgent, depth, tasks, Options{})
+}
+
+func (m *Manager) StartWithOptions(ownerSession, ownerAgent string, depth int, tasks []Task, options Options) (string, error) {
 	switch {
 	case ownerSession == "" || depth < 0:
 		return "", fmt.Errorf("%w: owner session required, depth >= 0", ErrInvalid)
@@ -94,10 +122,17 @@ func (m *Manager) Start(ownerSession, ownerAgent string, depth int, tasks []Task
 	if err != nil {
 		return "", err
 	}
+	options, err = normalizeOptions(options)
+	if err != nil {
+		return "", err
+	}
+	if err := normalizeTaskDirectories(tasks, options.CWD); err != nil {
+		return "", err
+	}
 	now := time.Now()
 	e := newEntry(Run{
 		ID: newID(), OwnerSession: ownerSession, OwnerAgent: ownerAgent, Depth: depth,
-		Status: Running, Tasks: tasks, CreatedAt: now, UpdatedAt: now,
+		Status: Running, Tasks: tasks, Options: options, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	})
 
 	m.mu.Lock()
@@ -179,6 +214,15 @@ func (m *Manager) Stop(ownerSession, id string) (Run, error) {
 		return Run{}, err
 	}
 	if e.cancel == nil {
+		if e.run.Status == Paused {
+			m.cancelQuotaTimer(e)
+			e.run.Status, e.run.FinishedAt, e.run.ResumeAt = Stopped, time.Now(), time.Time{}
+			m.persist(e)
+			m.notify(e.run)
+			run := e.run.clone()
+			m.mu.Unlock()
+			return run, nil
+		}
 		m.mu.Unlock()
 		return Run{}, fmt.Errorf("%w: it is %s", ErrNotRunning, e.run.Status)
 	}
@@ -194,33 +238,9 @@ func (m *Manager) Stop(ownerSession, id string) (Run, error) {
 	return m.Status(ownerSession, id)
 }
 
-// Resume continues a failed, stopped or interrupted run: tasks that succeeded
-// keep their results, every other task is reset and runs again (so failed and
-// blocked tasks get another try, interrupted ones are re-executed).
+// Resume preserves reusable successful calls and reruns unfinished work.
 func (m *Manager) Resume(ownerSession, id string) (Run, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	e, err := m.owned(ownerSession, id)
-	switch {
-	case err != nil:
-		return Run{}, err
-	case m.ctx.Err() != nil:
-		return Run{}, ErrClosed
-	case e.cancel != nil:
-		return Run{}, ErrRunning
-	case e.run.Status == Succeeded:
-		return Run{}, ErrNothingToResume
-	}
-	for i := range e.run.Tasks {
-		if t := &e.run.Tasks[i]; t.Status != Succeeded {
-			t.Status, t.Result, t.Error = Pending, "", ""
-			t.StartedAt, t.FinishedAt = time.Time{}, time.Time{}
-		}
-	}
-	e.run.Status, e.run.FinishedAt = Running, time.Time{}
-	m.launch(e)
-	m.persist(e)
-	return e.run.clone(), nil
+	return m.ResumeWithOptions(ownerSession, id, ResumeOptions{})
 }
 
 // Wait blocks until the ctx given to New is cancelled and every task and

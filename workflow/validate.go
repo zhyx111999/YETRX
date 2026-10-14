@@ -18,6 +18,7 @@ func normalize(tasks []Task) ([]Task, error) {
 	}
 	out := cloneTasks(tasks)
 	seen := make(map[string]bool, len(out))
+	checkpoints := make(map[string]bool)
 	for i := range out {
 		t := &out[i]
 		t.Label = strings.TrimSpace(t.Label)
@@ -27,12 +28,29 @@ func normalize(tasks []Task) ([]Task, error) {
 			return nil, fmt.Errorf("%w: task %d: label must be 1..%d characters", ErrInvalid, i+1, maxLabelRunes)
 		case seen[t.Label]:
 			return nil, fmt.Errorf("%w: duplicate label %q", ErrInvalid, t.Label)
-		case strings.TrimSpace(t.Task) == "":
+		case strings.TrimSpace(t.Task) == "" && t.Checkpoint == nil:
 			return nil, fmt.Errorf("%w: task %q has an empty prompt", ErrInvalid, t.Label)
 		}
 		seen[t.Label] = true
-		*t = Task{Label: t.Label, Task: t.Task, AgentKey: t.AgentKey,
-			DependsOn: t.DependsOn, Status: Pending}
+		if t.Isolation != "" && t.Isolation != "worktree" {
+			return nil, fmt.Errorf("%w: unsupported isolation %q", ErrInvalid, t.Isolation)
+		}
+		if t.Isolation != "" && (t.CWD != "" || t.Thread != "") {
+			return nil, fmt.Errorf("%w: isolation cannot be combined with cwd or thread", ErrInvalid)
+		}
+		if err := validateCheckpoint(t.Checkpoint); err != nil {
+			return nil, err
+		}
+		if t.Checkpoint != nil {
+			if checkpoints[t.Checkpoint.ID] {
+				return nil, fmt.Errorf("%w: duplicate checkpoint ID", ErrInvalid)
+			}
+			if t.Thread != "" || t.Isolation != "" || t.Task != "" {
+				return nil, fmt.Errorf("%w: checkpoint cannot also execute an agent", ErrInvalid)
+			}
+			checkpoints[t.Checkpoint.ID] = true
+		}
+		*t = taskRequest(*t)
 	}
 
 	indegree := make(map[string]int, len(out))
