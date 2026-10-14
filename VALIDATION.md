@@ -9,6 +9,14 @@
 - Windows `go test ./... -run '^$'` 全仓库编译、`go vet ./agent ./server ./workflow` 通过；前端 TypeScript 与 32 页生产导出通过。未重新调用真实 Astra，不把受控 provider 或聚焦测试表述为全仓库历史测试全绿。
 - README、父代理引导、启动回执、三份原生技能与设置页说明同步。没有变更数据库结构、模型配置、用户提示词或 Persona；以下旧版本记录中的“全局并发 4”为当时行为，由本版本替代。
 
+源码 `aa16a4653de226e23d53e99a505fea2859ccfec8` 已推送并发布 [v0.2.5-yetrx.7](https://github.com/zhyx111999/YETRX/releases/tag/v0.2.5-yetrx.7)。Actions `38563222562` 前端、五平台和 release 全部成功，Docker 按配置跳过。
+
+- Linux amd64 ZIP SHA256 `bcbfcad5f964ae8a26a6c067312c28a09ce80863629c566822a6ea469b96f48d` 已按发布 SHA256SUMS 校验；线上二进制 SHA256 `21bb58362956c1955d7847e96e7f82759714cf01966104d6fa43a3941166a835` 与资产一致。服务健康版本 `0.2.5-yetrx.7`、systemd active。
+- 停服切换前确认没有运行中的主对话或后台工作流；按当次数据备份 binary、unit、PostgreSQL dump 和 SQLite 一致性副本。部署前后 49 张受保护表、5988 个文件和 SQLite 逻辑内容核对通过；19 会话、3321 活动、1 模型配置、10 提示词版本、1 Persona 保留。settings、工具偏好、JWT 与 unit 保持；三个技能只在全文匹配 `.6` 默认时升级。回滚备份 `/opt/artex/_rollback-v0.2.5-yetrx.7` 保留。
+- Edge 线上桌面 1440px/移动 390px 的真实设置与聊天页面只读检查通过：每对话独享 4 个名额的说明正确，文件发送上限与当次 API 设置一致，页面运行错误、横向溢出和 API 写操作均为 0。
+- 同步交付的本地 pi 插件已推送 `735eaaf` 至个人仓库 main；`npm test` 为 1634 通过、0 失败、1 项 Windows 平台跳过，`check:dist` 和 Actions `38607105098` 通过。真实 Pi 1.1.0 AgentSession＋受控 provider 验证边界插入/FIFO/中止/settle 窗口；本机配置仍为 16，重启 Pi 后加载新版。
+- 独立测试数据库/角色 `yetrx_session_20261014`、远端 Go/源码/缓存/凭据暂存、本机操作目录、前端构建缓存及本轮三个隔离工作树已清理。清理时发现并终止了会话并发变异验证遗留的测试进程；保留插件依赖、提交的 dist 和生产回滚备份。
+
 ## v0.2.5-yetrx.5 / .6：子任务与子代理的定位区分
 
 - 原版 Planner/Worker 体系统一为「子任务（探索）」：围绕探索目标持续规划、领取探索意图并执行。系统设置显示「子任务执行并发（探索）」，明确每个探索任务默认 3 个执行槽位，不是累计任务数；任务列表、执行会话、操作反馈和内置角色说明同步更新。
