@@ -23,7 +23,7 @@ SDK 基础工具（Bash、Read、Write、Edit、MultiEdit、LS、Glob、Grep）�
 {"tasks":[{"label":"review","agent_key":"agent","task":"独立检查指定文件，报告实际操作、证据和结果。"}]}
 ```
 
-启动后保留返回的 `run_id`。控制工具支持 `list`、`status`、`read`、`stop`、`resume`、`message`；明确提供 run_id 和目标 label，不使用探索子任务的 task_id/intent_id。例如：
+启动后保留返回的 `run_id`。主对话正在输出时，子代理记录和结果先排队，本轮输出及工具执行结束后立即依序插入，不打断回复，也不需要用户再发消息。控制工具支持 `list`、`status`、`read`、`stop`、`resume`、`message`；明确提供 run_id 和目标 label，不使用探索子任务的 task_id/intent_id。例如：
 
 ```json
 {"action":"read","run_id":"返回的ID","label":"review","max_chars":8000}
@@ -33,6 +33,6 @@ SDK 基础工具（Bash、Read、Write、Edit、MultiEdit、LS、Glob、Grep）�
 
 `subagents` 可设置运行 `cwd`、`agent_retries`（默认 0、最多额外 3 次）和 `agent_timeout_ms`（默认 0）；工作项可选 `isolation:"worktree"`、`keep_worktree`、`thread`。默认共享源码目录，改写代码时显式使用 worktree；默认保留且不自动合并。只有可恢复错误在旧执行器退出后才重试。额度限制单独暂停并有限自动恢复，stop 会取消定时器。详细语义和示例见 workflow-authoring。
 
-子代理始终不能调用 subagents/subagents_control；即使模式绑定了这两个工具，也会在子会话中被排除。子代理全局并发为 4，与「系统配置 → 子任务执行并发（探索）」独立；后者为每个探索任务的 Worker 执行槽位，默认 3，不是累计子任务数量，也不控制子代理。
+子代理始终不能调用 subagents/subagents_control；即使模式绑定了这两个工具，也会在子会话中被排除。子代理每个父对话独享 4 个并发名额：同一对话的多批运行共用，不同对话各自独立；与「系统配置 → 子任务执行并发（探索）」独立；后者为每个探索任务的 Worker 执行槽位，默认 3，不是累计子任务数量，也不控制子代理。
 
 无需安装 pi、Node Agent 运行时、个人插件或复制个人认证文件。

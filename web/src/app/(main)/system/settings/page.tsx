@@ -663,7 +663,7 @@ export default function SystemSettingsPage() {
               每个探索任务的执行槽位数（Worker，默认 3），不是累计子任务数量。规划者持续规划，执行器逐条领取探索意图并执行；并发越高，消耗越高。修改后
               <b>对之后启动的探索任务生效</b>，正在运行的任务不受影响。
               <br />
-              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验；其全局并发独立为 4。
+              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验。每个对话独享 4 个子代理并发名额，同一对话内多批运行共用，不同对话互不占用。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">

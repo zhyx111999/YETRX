@@ -109,7 +109,7 @@ func TestNativeWorkflowLiveParity(t *testing.T) {
 	ca.SetNonStreaming(func() bool { return !cfg.Stream })
 	ca.SetMaxTokens(func() int { return 4000 })
 	s := &Server{ctx: ctx, m: &Manager{pg: e.pg, dir: root}, skillDir: e.skillDir, chatAgent: ca,
-		chatBusy: map[string]bool{}, chatCancel: map[string]context.CancelCauseFunc{}, workflowPending: map[string][]string{}, workflowMuted: map[string]bool{}}
+		chatBusy: map[string]bool{}, chatCancel: map[string]context.CancelCauseFunc{}, workflowPending: map[string][]workflowDelivery{}, workflowMuted: map[string]bool{}}
 	conv, err := e.pg.CreateConversation("agent", "isolated Astra parity validation", nil)
 	if err != nil {
 		t.Fatal(err)

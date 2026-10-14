@@ -76,8 +76,8 @@ type Server struct {
 	chatCancel map[string]context.CancelCauseFunc
 
 	workflows       *workflow.Manager
-	workflowPending map[string][]string // protected by chatMu, shared by every mode
-	workflowMuted   map[string]bool     // manual stop suppresses queued automatic replies
+	workflowPending map[string][]workflowDelivery // per-conversation FIFO, protected by chatMu
+	workflowMuted   map[string]bool               // manual stop suppresses queued automatic replies
 
 	// triggerQ buffers P3 trigger fires PER AGENT. A per-agent "pump" launches runs up
 	// to a concurrency limit derived from the agent's策略: serial → limit 1 (+ optional
@@ -152,7 +152,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
-		workflowPending: map[string][]string{}, workflowMuted: map[string]bool{},
+		workflowPending: map[string][]workflowDelivery{}, workflowMuted: map[string]bool{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),

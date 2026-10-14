@@ -437,9 +437,7 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	delete(s.workflowMuted, busyKey)
 	s.chatMu.Unlock()
 	if err := s.ensureNativeHistory(c.ID); err != nil {
-		s.chatMu.Lock()
-		delete(s.chatBusy, busyKey)
-		s.chatMu.Unlock()
+		s.finishConversationTurn(busyKey)
 		writeErr(w, 500, "历史迁移失败: "+err.Error())
 		return
 	}
@@ -515,11 +513,7 @@ func (s *Server) conversationRunContext(id int64, busyKey string) (context.Conte
 func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelCauseFunc, c *db.Conversation, msg, busyKey string) {
 	defer func() {
 		cancel(agent.AbortChatTurnFinished)
-		s.chatMu.Lock()
-		delete(s.chatBusy, busyKey)
-		delete(s.chatCancel, busyKey)
-		s.chatMu.Unlock()
-		s.pumpWorkflowMessages(busyKey)
+		s.finishConversationTurn(busyKey)
 	}()
 	// Only the first turn executes a historical retest. Follow-up conversation
 	// turns may explain the sealed result; the result tool refuses to overwrite it.

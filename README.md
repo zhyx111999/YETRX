@@ -25,7 +25,7 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 | 名称 | 定位与入口 | 标识与并发 |
 | --- | --- | --- |
 | **子任务（探索）** | 原版 Planner/Worker 探索机制。围绕探索目标持续规划，执行器领取探索意图、执行并写回探索记录；通过任务页面或 `spawn_task` 等探索入口使用 | 探索任务 `task_id`、执行事项 `intent_id`；每个探索任务默认 3 个 Worker 执行槽位，在「系统配置 → 子任务执行并发（探索）」调整 |
-| **子代理（对话）** | `subagents` 按需启动独立会话，一次完成一件明确的求证、审查或小范围改写；报告实际操作、依据与结果，由主对话核验、决定是否采纳或合并 | `run_id` / `label`，用 `subagents_control` 管理；全局并发 4，与探索执行槽位独立 |
+| **子代理（对话）** | `subagents` 按需启动独立会话，一次完成一件明确的求证、审查或小范围改写；报告实际操作、依据与结果，由主对话核验、决定是否采纳或合并 | `run_id` / `label`，用 `subagents_control` 管理；每个父对话独享 4 个并发名额，同一对话的多批运行共用；不同对话互不占用，与探索执行槽位独立 |
 
 探索根任务仍称「探索任务」，内部领取的一条探索意图是一个子任务执行事项；Worker 是可复用的执行槽位，不是累计创建的任务数。两套机制均保留，接口、ID、历史、调度逻辑和资源绑定不因显示名称改变而迁移或重置。简短问答和一两步修改直接完成，不必派发子代理。
 
@@ -42,9 +42,9 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 }
 ```
 
-独立任务并行，有依赖的任务按顺序执行；前置任务失败时后续任务标记 blocked。启动立即返回 `run_id`，完成后结果自动回到根对话；当前对话正在运行时等待它结束后汇总。停止对话同时取消其后台任务和未执行的自动回复。
+独立任务并行，有依赖的任务按顺序执行；前置任务失败时后续任务标记 blocked。启动立即返回 `run_id`，完成后结果自动回到根对话；当前对话正在运行时，子代理执行记录、结果卡片和自动汇总统一排队，在本轮输出及工具执行全部结束的边界立即依序插入，无须轮询或再发一条消息。停止对话同时取消其后台任务和未执行的自动回复；排队的审计记录仍保留。
 
-控制动作：`list`、`status`、`read`、`stop`、`resume`、`message`。`read` 一次读取一个 label，最多末尾 8000 字符。默认全局并发 4、每批最多 32 项；子代理硬性禁止再次派发或控制子代理。状态保存在数据目录的 `workflows/`。
+控制动作：`list`、`status`、`read`、`stop`、`resume`、`message`。`read` 一次读取一个 label，最多末尾 8000 字符。默认每个父对话并发 4、每批最多 32 项；子代理硬性禁止再次派发或控制子代理。状态保存在数据目录的 `workflows/`。
 
 | 机制 | 当前行为 |
 | --- | --- |
@@ -58,7 +58,7 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 
 同次任务自动重试共享其工作树；恢复后重新执行的任务创建新工作树。`keep_worktree:false` 在执行器退出后删除该任务的工作树和分支。独立子会话不复制父完整历史。服务重启将仍运行的任务标为 interrupted，普通中断需手动恢复；resume 不恢复 Go 调用栈，也不保证工具副作用只执行一次。
 
-五项机制参照当前 `zhyx111999/pi-workflows-lean` 源码，以原生 Go/ChatAgent 实现；模型仍继承父会话，全局并发仍为 4，流程使用原生 DAG。详细契约和示例见 [workflow-authoring](skills/workflow-authoring/SKILL.md)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+五项机制参照当前 `zhyx111999/pi-workflows-lean` 源码，以原生 Go/ChatAgent 实现；模型仍继承父会话，并发数仍为 4，但按父对话分别计算，流程使用原生 DAG。详细契约和示例见 [workflow-authoring](skills/workflow-authoring/SKILL.md)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 三个说明技能 `workflow-authoring`、`workflow-patterns`、`subagents-setup` 位于统一 `skills/` 中，已按原生工具重写。流程使用任务依赖，不执行旧 pi 的 JavaScript 工作流脚本。没有安装 Tavily。
 

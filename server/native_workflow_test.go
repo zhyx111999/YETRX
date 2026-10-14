@@ -143,7 +143,7 @@ func newNativeWorkflowServer(t *testing.T) (*Server, *nativeEnv, *nativeWorkflow
 	chat := agent.NewChatAgent(provider, "fixture", root, transcript.NewStore(filepath.Join(root, "transcripts")), 100000)
 	chat.SetNonStreaming(func() bool { return true })
 	s := &Server{ctx: ctx, m: &Manager{pg: e.pg, dir: root}, skillDir: e.skillDir, chatAgent: chat,
-		chatBusy: map[string]bool{}, chatCancel: map[string]context.CancelCauseFunc{}, workflowPending: map[string][]string{}, workflowMuted: map[string]bool{}}
+		chatBusy: map[string]bool{}, chatCancel: map[string]context.CancelCauseFunc{}, workflowPending: map[string][]workflowDelivery{}, workflowMuted: map[string]bool{}}
 	conv, err := e.pg.CreateConversation("agent", "native workflow", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,20 @@ func TestNativeWorkflowUsesSharedResourcesAndQueuesDelivery(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Flatten()), &started); err != nil {
 		t.Fatal(err)
 	}
-	waitNativeWorkflow(t, func() bool { s.chatMu.Lock(); defer s.chatMu.Unlock(); return len(s.workflowPending[session]) == 1 })
+	waitNativeWorkflow(t, func() bool {
+		s.chatMu.Lock()
+		defer s.chatMu.Unlock()
+		for _, message := range s.workflowPending[session] {
+			if message.Prompt != "" {
+				return true
+			}
+		}
+		return false
+	})
+	before, _, err := e.pg.ConvActivityList(conv.ID, 0, 100)
+	if err != nil || len(before) != 0 {
+		t.Fatalf("child audit/result interleaved with busy parent: %d rows, %v", len(before), err)
+	}
 	provider.mu.Lock()
 	childCalls, parentCalls := provider.childCalls, provider.parentCalls
 	tools := append([]llm.ToolSchema(nil), provider.childTools...)
@@ -209,10 +222,7 @@ func TestNativeWorkflowUsesSharedResourcesAndQueuesDelivery(t *testing.T) {
 	if err != nil || read != "NATIVE_CHILD_DONE" {
 		t.Fatalf("result: %q %v", read, err)
 	}
-	s.chatMu.Lock()
-	delete(s.chatBusy, session)
-	s.chatMu.Unlock()
-	s.pumpWorkflowMessages(session)
+	s.finishConversationTurn(session)
 	waitNativeWorkflow(t, func() bool {
 		s.chatMu.Lock()
 		busy := s.chatBusy[session]
@@ -243,6 +253,11 @@ func TestNativeWorkflowStopSuppressesQueuedReplyAndCancelledStart(t *testing.T) 
 	s.stopConversationWorkflows(conv.ID)
 	s.workflowCompleted(workflow.Run{ID: "fixture", OwnerSession: session, OwnerAgent: "agent", Status: workflow.Succeeded,
 		Tasks: []workflow.Task{{Label: "done", Status: workflow.Succeeded, Result: "late completion"}}})
+	waitNativeWorkflow(t, func() bool {
+		s.chatMu.Lock()
+		defer s.chatMu.Unlock()
+		return !s.chatBusy[session]
+	})
 	s.chatMu.Lock()
 	pending, busy := len(s.workflowPending[session]), s.chatBusy[session]
 	s.chatMu.Unlock()

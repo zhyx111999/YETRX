@@ -100,9 +100,7 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 	ctx = context.WithValue(intercept.WithConvID(ctx, id), workflowCallerKey{}, workflowCaller{Session: job.OwnerSession, Agent: job.OwnerAgent, Depth: job.Depth})
 	emit := func(activity db.Activity) {
 		activity.Worker = "subagent:" + job.Task.Label
-		if _, err := s.m.pg.AppendConvActivity(id, activity); err != nil {
-			log.Printf("[workflow %s] activity: %v", job.RunID, err)
-		}
+		s.queueWorkflowDelivery(job.OwnerSession, workflowDelivery{Activity: activity})
 	}
 	ctx = agent.WithChatControl(ctx, agent.ChatControl{WorkingDirectory: job.CWD, Child: true, DrainMessages: job.Messages.Drain, RollbackOnError: job.Task.Thread != ""})
 	text, err := ca.Chat(ctx, key, session, prompt.String(), mode.MaxTurns, time.Duration(mode.RunSecs)*time.Second, mode.WebSearch, emit)
