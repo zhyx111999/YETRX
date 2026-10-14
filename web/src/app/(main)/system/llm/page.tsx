@@ -858,7 +858,7 @@ export default function LLMPage() {
       <PersonaPanel />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="font-semibold text-xl tracking-tight">LLM</h1>
+          <h1 className="font-semibold text-xl tracking-tight">LLM 与人格</h1>
           <p className="text-muted-foreground text-sm">
             全 Agent 共享的格式 / 模型 / 限速配置。点击卡片编辑，星标为当前激活配置。
           </p>
