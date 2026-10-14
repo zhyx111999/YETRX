@@ -195,7 +195,7 @@ var builtinAgents = []builtinAgent{
 		// Now 是全局 runtime 变量(见 server.globalPromptVars),不再在各 agent 目录里
 		// 重复定义,否则 withGlobalVars 追加时会与全局项撞名。
 	}, false, nil},
-	{"planner", "规划", "planner", "读取态势、判定目标，只在确有未覆盖的新方向时补充探索意图（每任务一个规划循环）。", []promptVar{
+	{"planner", "子任务规划", "planner", "探索子任务的规划者（Planner）：围绕探索目标持续读取态势、判定目标、补充未覆盖的探索意图；每个探索任务一个规划循环，不是对话子代理。", []promptVar{
 		{"Goal", "任务总目标", "拿下 example.com 的管理员权限", "exploration"},
 		{"AssetSummary", "资产计数/类型分布摘要(可选)", "domain:3 ip:5 site:2", "distilled"},
 	}, false, nil},
@@ -204,7 +204,7 @@ var builtinAgents = []builtinAgent{
 		{"AssetSummary", "开局态势摘要(可选)", "domain:3 ip:5", "distilled"},
 		{"FindingsSummary", "已确认漏洞摘要(可选)", "high:1 medium:2", "distilled"},
 	}, false, nil},
-	{"worker", "执行", "worker", "领取一条意图执行，把发现的事实/漏洞写回知识图谱后停止。", []promptVar{
+	{"worker", "子任务执行", "worker", "探索子任务的执行器（Worker）：领取一条探索意图、执行并写回事实或漏洞后返回，执行槽位由探索引擎继续调度；不是 subagents 子代理。", []promptVar{
 		{"ProxyAddr", "记录代理地址(驱动 if 双文案)", "127.0.0.1:8080", "runtime"},
 		{"WorkerName", "worker 自我标识(可选)", "worker-1", "runtime"},
 	}, false, nil},
@@ -223,12 +223,21 @@ func (d *DB) seedBuiltins() error {
 		if a.key == minimalprompt.AgentKey {
 			continue // The one-time migration owns this row; preserve later user edits.
 		}
+		oldName, oldDescription := a.name, a.desc
+		switch a.key {
+		case "planner":
+			oldName, oldDescription = "规划", "读取态势、判定目标，只在确有未覆盖的新方向时补充探索意图（每任务一个规划循环）。"
+		case "worker":
+			oldName, oldDescription = "执行", "领取一条意图执行，把发现的事实/漏洞写回知识图谱后停止。"
+		}
 		var agentID int64
 		err := d.QueryRow(`
 INSERT INTO agents(key, name, description, role, builtin, enabled, interactive_shell, run_seconds)
 VALUES ($1, $2, NULLIF($3,''), $4, true, true, $5, COALESCE($6, 1200))
-ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
-RETURNING id`, a.key, a.name, a.desc, a.role, a.interactiveShell, a.runSeconds).Scan(&agentID)
+ON CONFLICT (key) DO UPDATE SET
+  name = CASE WHEN agents.name=$7 THEN EXCLUDED.name ELSE agents.name END,
+  description = CASE WHEN agents.description=$8 THEN EXCLUDED.description ELSE agents.description END
+RETURNING id`, a.key, a.name, a.desc, a.role, a.interactiveShell, a.runSeconds, oldName, oldDescription).Scan(&agentID)
 		if err != nil {
 			return fmt.Errorf("agent %s: %w", a.key, err)
 		}

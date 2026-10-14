@@ -1,16 +1,18 @@
 ---
 name: subagents-setup
-description: 使用平台现有的全局模式、模型、技能、函数工具和 MCP 管理配置原生子任务。
+description: 用现有全局模式、模型、技能、函数工具和 MCP 配置独立子代理；与持续规划执行的探索子任务区分。
 ---
 
-# 原生子任务配置
+# 子代理配置
 
-资源只在平台现有位置维护，没有单独的 Agent 或子任务技能目录。
+**子代理**：主对话按需用 `subagents` 启动独立会话，完成一次明确的求证、审查或小范围修改，返回实际操作、依据和结果，由主对话核验。**子任务**：原版探索机制，通过 `spawn_task` 等入口建立，围绕探索目标由规划者持续规划、执行器领取探索意图并执行。不要混用两套入口与标识。
 
-- **系统 → Agent**：管理对话模式、提示词、启用状态、轮次和时间预算。子任务通过 `agent_key` 选择同一份模式配置。
-- **系统 → LLM 与人格**：管理全局模型配置。`subagents` 自动沿用启动它的当前对话的 ChatAgent 和模型配置，不提供子任务级 `llm_profile_id` 覆盖；当前对话的 Agent 绑定、会话选择和全局激活配置按现有解析链继承。
+资源只在平台现有位置维护，没有单独的 Agent 或子代理技能目录。
+
+- **系统 → Agent**：管理对话模式、提示词、启用状态、轮次和时间预算。子代理通过 `agent_key` 选择同一份模式配置。
+- **系统 → LLM 与人格**：管理全局模型配置。`subagents` 自动沿用启动它的当前对话的 ChatAgent 和模型配置，不提供子代理级 `llm_profile_id` 覆盖；当前对话的 Agent 绑定、会话选择和全局激活配置按现有解析链继承。`spawn_task` 的模型参数属于探索子任务，不适用于子代理。
 - **系统 → 函数工具**：管理共享工具的描述、启用状态和模式绑定。将 `subagents`、`subagents_control` 绑定给需要它们的模式。
-- **系统 → 技能**：编辑同一个全局技能目录并设置模式可见性。技能内容和工具描述的修改在下次原生对话/子任务运行时读取。
+- **系统 → 技能**：编辑同一个全局技能目录并设置模式可见性。技能内容和工具描述的修改在下次原生对话/子代理运行时读取。
 - **系统 → MCP**：管理共享服务及模式可见性。技能引用的 MCP 继续遵守平台原有的按需解锁机制。
 
 SDK 基础工具（Bash、Read、Write、Edit、MultiEdit、LS、Glob、Grep）按上游方式由所有原生模式共用；它们不是每个模式各存一份的资源。
@@ -18,19 +20,19 @@ SDK 基础工具（Bash、Read、Write、Edit、MultiEdit、LS、Glob、Grep）�
 工具调用示例：
 
 ```json
-{"tasks":[{"label":"review","agent_key":"agent","task":"独立检查指定文件并报告证据。"}]}
+{"tasks":[{"label":"review","agent_key":"agent","task":"独立检查指定文件，报告实际操作、证据和结果。"}]}
 ```
 
-启动后保留返回的 `run_id`。控制工具支持 `list`、`status`、`read`、`stop`、`resume`、`message`，例如：
+启动后保留返回的 `run_id`。控制工具支持 `list`、`status`、`read`、`stop`、`resume`、`message`；明确提供 run_id 和目标 label，不使用探索子任务的 task_id/intent_id。例如：
 
 ```json
 {"action":"read","run_id":"返回的ID","label":"review","max_chars":8000}
 ```
 
-结果保存于平台数据目录的 `workflows/`；服务重启将未完成运行标为 interrupted，手动 resume 才重新调度。编辑恢复时复用未变且成功的一次性任务，变更项及其下游重跑；命名 thread 回合不会复用。checkpoint 的等待与响应持久化。
+结果保存于平台数据目录的 `workflows/`；服务重启将未完成运行标为 interrupted，手动 resume 才重新调度。编辑恢复时复用未变且成功的一次性工作项，变更项及其下游重跑；命名 thread 回合不会复用。checkpoint 的等待与响应持久化。
 
-`subagents` 可设置运行 `cwd`、`agent_retries`（默认 0、最多额外 3 次）和 `agent_timeout_ms`（默认 0）；任务可选 `isolation:"worktree"`、`keep_worktree`、`thread`。默认共享源码目录，显式 worktree 默认保留且不自动合并。只有可恢复错误在旧执行器退出后才重试。额度限制单独暂停并有限自动恢复，stop 会取消定时器。详细语义和示例见 workflow-authoring。
+`subagents` 可设置运行 `cwd`、`agent_retries`（默认 0、最多额外 3 次）和 `agent_timeout_ms`（默认 0）；工作项可选 `isolation:"worktree"`、`keep_worktree`、`thread`。默认共享源码目录，改写代码时显式使用 worktree；默认保留且不自动合并。只有可恢复错误在旧执行器退出后才重试。额度限制单独暂停并有限自动恢复，stop 会取消定时器。详细语义和示例见 workflow-authoring。
 
-子代理始终不能调用 subagents/subagents_control；即使模式绑定了这两个工具，也会在子会话中被排除。现有全局并发仍为 4，与探索引擎的 Work Agent 数独立。
+子代理始终不能调用 subagents/subagents_control；即使模式绑定了这两个工具，也会在子会话中被排除。子代理全局并发为 4，与「系统配置 → 子任务执行并发（探索）」独立；后者为每个探索任务的 Worker 执行槽位，默认 3，不是累计子任务数量，也不控制子代理。
 
 无需安装 pi、Node Agent 运行时、个人插件或复制个人认证文件。

@@ -76,7 +76,7 @@ export default function SystemSettingsPage() {
       .setSettings({ workers: n })
       .then((s) => {
         apply(s);
-        toast.success("已保存并发工作 agent 数（对之后启动的任务生效）");
+        toast.success("已保存子任务执行并发（对之后启动的探索任务生效）");
       })
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
       .finally(() => setSavingWorkers(false));
@@ -397,7 +397,7 @@ export default function SystemSettingsPage() {
             </div>
             <div className="flex items-center justify-between gap-4">
               <Label htmlFor="inject-worker" className="text-sm font-normal text-muted-foreground">
-                注入执行者（worker）{injectWorker ? " · 已开启" : " · 已关闭"}
+                注入子任务执行器（Worker）{injectWorker ? " · 已开启" : " · 已关闭"}
               </Label>
               <Switch
                 id="inject-worker"
@@ -657,11 +657,13 @@ export default function SystemSettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CpuIcon className="size-4" />
-              工作并发 · Work Agent 数
+              子任务执行并发（探索）
             </CardTitle>
             <CardDescription>
-              每个任务并发运行的工作 agent 数量（默认 3）。数值越大并发探测越多、消耗也越高。修改后
-              <b>对之后启动的任务生效</b>，正在运行的任务不受影响。
+              每个探索任务的执行槽位数（Worker，默认 3），不是累计子任务数量。规划者持续规划，执行器逐条领取探索意图并执行；并发越高，消耗越高。修改后
+              <b>对之后启动的探索任务生效</b>，正在运行的任务不受影响。
+              <br />
+              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验；其全局并发独立为 4。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -672,6 +674,7 @@ export default function SystemSettingsPage() {
                 className="w-32 font-mono text-sm"
                 placeholder="3"
                 value={workers}
+                aria-label="每个探索任务的子任务执行槽位数"
                 disabled={!loaded || savingWorkers}
                 onChange={(e) => setWorkers(e.target.value)}
               />

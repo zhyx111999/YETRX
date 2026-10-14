@@ -779,6 +779,9 @@ export default function TasksPage() {
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
+      <p className="px-4 text-sm text-muted-foreground lg:px-6">
+        探索任务围绕目标持续推进：规划者生成子任务，执行器领取探索意图并执行。独立求证、审查或小范围改写请在对话中使用子代理（subagents），由主对话核验结果。
+      </p>
       <TabsList className="mx-4 lg:mx-6">
         <TabsTrigger value="current">当前任务</TabsTrigger>
         <TabsTrigger value="archived">已归档</TabsTrigger>
@@ -953,7 +956,7 @@ export default function TasksPage() {
                     <TableHead className="text-center" title="严重 / 高 / 中 / 低">
                       漏洞 <span className="text-muted-foreground font-normal">严/高/中/低</span>
                     </TableHead>
-                    <TableHead className="text-center">运行中 Worker</TableHead>
+                    <TableHead className="text-center">执行中子任务</TableHead>
                     <SortableTaskHead
                       field="created"
                       label="创建时间"

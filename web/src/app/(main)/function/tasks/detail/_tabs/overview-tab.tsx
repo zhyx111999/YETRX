@@ -909,7 +909,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             />
           </div>
           <div>
-            <div className="text-xs text-muted-foreground">运行中 Worker</div>
+            <div className="text-xs text-muted-foreground">执行中子任务</div>
             <div className="mt-1 text-lg font-semibold tabular-nums">{running.length}</div>
           </div>
           <div>

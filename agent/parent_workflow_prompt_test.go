@@ -45,10 +45,12 @@ func TestChatParentWorkflowPromptStaysAtRequestBoundary(t *testing.T) {
 		name         string
 		marked       bool
 		workflowTool bool
+		child        bool
 	}{
 		{name: "ordinary", marked: false},
 		{name: "human-turn-with-subagents", marked: true, workflowTool: true},
 		{name: "human-turn-without-subagents", marked: true},
+		{name: "child-turn", marked: true, workflowTool: true, child: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,6 +72,9 @@ func TestChatParentWorkflowPromptStaysAtRequestBoundary(t *testing.T) {
 			if tc.marked {
 				ctx = WithParentWorkflowPrompt(ctx)
 			}
+			if tc.child {
+				ctx = WithChatControl(ctx, ChatControl{Child: true})
+			}
 			if _, err := chat.Chat(ctx, "agent", "conv-parent-prompt", "ORIGINAL_USER_TEXT", 2, time.Minute, false, func(db.Activity) {}); err != nil {
 				t.Fatal(err)
 			}
@@ -86,9 +91,17 @@ func TestChatParentWorkflowPromptStaysAtRequestBoundary(t *testing.T) {
 			}
 			system := strings.Join(provider.request.System, "\n")
 			got := strings.Contains(system, ParentWorkflowPrompt)
-			want := tc.marked && tc.workflowTool
+			want := tc.marked && tc.workflowTool && !tc.child
 			if got != want {
 				t.Fatalf("parent prompt present=%v, want %v; system=%q", got, want, system)
+			}
+			if strings.Contains(system, SubagentContext) != tc.child || strings.Contains(system, ExplorationSubtaskContext) {
+				t.Fatalf("delegation context mixed up: %q", system)
+			}
+			for _, message := range provider.request.Messages {
+				if strings.Contains(message.Text(), SubagentContext) || strings.Contains(message.Text(), ParentWorkflowPrompt) {
+					t.Fatal("runtime delegation context leaked into message history")
+				}
 			}
 		})
 	}

@@ -887,7 +887,7 @@ function sendMockWorkerMessage(
   const previous = mockWorkerMessages.get(normalizedRequestId);
   if (previous) {
     if (previous.intentId !== id || previous.message !== normalizedMessage) {
-      return { ok: false, error: "request_id 已用于其他 Worker 消息" };
+      return { ok: false, error: "request_id 已用于其他子任务消息" };
     }
     return {
       ok: true,
@@ -899,7 +899,7 @@ function sendMockWorkerMessage(
   const intent = mockIntents.find((item) => item.id === id);
   if (!intent) return { ok: false, error: "意图不存在" };
   if (intent.inherited || intent.state !== "paused") {
-    return { ok: false, state: intent.state, error: "仅已暂停的 Worker 可以发送消息，请先暂停" };
+    return { ok: false, state: intent.state, error: "仅已暂停的子任务可以发送消息，请先暂停" };
   }
   if (!normalizedMessage) return { ok: false, state: intent.state, error: "消息不能为空" };
   if (Array.from(normalizedMessage).length > 4000) {

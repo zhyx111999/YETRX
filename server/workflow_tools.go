@@ -71,14 +71,14 @@ func workflowTaskSchema() map[string]any {
 // and workflowOwner also denies their handlers, including indirect calls.
 func (s *Server) workflowTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		wrTool("subagents", "后台启动原生子任务，立即返回 run_id；结束或暂停时自动回传。子任务继承当前会话实际使用的模型配置。默认共享运行 cwd，显式 isolation=worktree 创建独立源码副本。", objSchema(map[string]any{
+		wrTool("subagents", "按需启动子代理：用独立会话完成一次明确的求证、审查或小范围修改，返回结果供主对话核验，不负责围绕探索目标持续规划。需要持续探索时使用 spawn_task 子任务。立即返回 run_id；结束或暂停自动回传。模型继承当前会话；默认共享 cwd，改源码时用 isolation=worktree 创建独立副本，不自动合并。", objSchema(map[string]any{
 			"tasks": workflowTaskSchema(), "cwd": strParam("运行源码根目录；省略使用父对话工作目录"),
 			"agent_retries":    map[string]any{"type": "integer", "minimum": 0, "maximum": workflow.MaxAgentRetries, "default": 0, "description": "可恢复失败后的额外尝试次数；等待旧执行器停止后重试"},
 			"agent_timeout_ms": map[string]any{"type": "integer", "minimum": 0, "maximum": 2147483647, "default": 0, "description": "每次尝试的硬超时；0 不另加超时，模式预算仍有效"},
 		}, "tasks"), s.startWorkflow),
-		wrTool("subagents_control", "管理当前对话的后台任务。message 只向正在执行的子任务排队指令，在下次模型调用前送达；提前结束则丢弃。resume 可提交编辑后的 tasks，复用未变成功步骤；变更及其下游重跑。检查点必须给 checkpoint_id 和 response。read 一次一项，最多末尾 8000 字符。", objSchema(map[string]any{
+		wrTool("subagents_control", "管理当前对话的后台子代理（run_id/label），不控制探索子任务（task_id/intent_id）。message 向正在执行的子代理排队指令，在下次模型调用前送达，提前结束则丢弃。resume 可提交编辑后的 tasks，复用未变成功步骤；变更及其下游重跑。检查点必须给 checkpoint_id 和 response。read 明确提供 run_id/label，一次读取一个子代理，最多末尾 8000 字符。", objSchema(map[string]any{
 			"action": map[string]any{"type": "string", "enum": []string{"list", "status", "read", "stop", "resume", "message"}},
-			"run_id": strParam("subagents 返回的 run_id"), "label": strParam("read/message 的单个子任务"),
+			"run_id": strParam("subagents 返回的 run_id"), "label": strParam("read/message 的单个子代理 label"),
 			"text": strParam("追加指令原文"), "tasks": workflowTaskSchema(), "checkpoint_id": strParam("当前等待响应的检查点 ID"),
 			"response":  map[string]any{"description": "检查点响应，任意 JSON，包括 null"},
 			"max_chars": map[string]any{"type": "integer", "minimum": 1, "maximum": workflow.MaxReadChars, "default": workflow.MaxReadChars},
@@ -108,7 +108,7 @@ func (s *Server) validateWorkflowModes(tasks []workflow.Task, owner workflowCall
 
 func (s *Server) startWorkflow(ctx context.Context, input json.RawMessage) (actool.Result, error) {
 	if s.workflows == nil {
-		return actool.Errorf("后台任务管理器未就绪"), nil
+		return actool.Errorf("子代理管理器未就绪"), nil
 	}
 	owner, err := s.workflowOwner(ctx)
 	if err != nil {
@@ -146,12 +146,12 @@ func (s *Server) startWorkflow(ctx context.Context, input json.RawMessage) (acto
 	if err != nil {
 		return actool.Errorf(err.Error()), nil
 	}
-	return jsonResult(map[string]any{"run_id": id, "status": "running", "message": "任务已在后台启动，结束或暂停后自动返回当前对话。"})
+	return jsonResult(map[string]any{"run_id": id, "status": "running", "message": "子代理已在后台启动，结束或暂停后自动返回当前对话供主代理审查。"})
 }
 
 func (s *Server) controlWorkflow(ctx context.Context, input json.RawMessage) (actool.Result, error) {
 	if s.workflows == nil {
-		return actool.Errorf("后台任务管理器未就绪"), nil
+		return actool.Errorf("子代理管理器未就绪"), nil
 	}
 	owner, err := s.workflowOwner(ctx)
 	if err != nil {
@@ -185,7 +185,7 @@ func (s *Server) controlWorkflow(ctx context.Context, input json.RawMessage) (ac
 		if err = s.workflows.Message(owner.Session, request.RunID, request.Label, request.Text); err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		return jsonResult(map[string]any{"run_id": request.RunID, "label": request.Label, "result": "queued", "message": "指令将在下次模型调用前送达；若子任务先结束，则丢弃。"})
+		return jsonResult(map[string]any{"run_id": request.RunID, "label": request.Label, "result": "queued", "message": "指令将在下次模型调用前送达；若子代理先结束，则丢弃。"})
 	}
 	var run workflow.Run
 	switch request.Action {

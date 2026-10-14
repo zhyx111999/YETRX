@@ -23,6 +23,9 @@ func (s *Server) initWorkflows() {
 	if err := s.upgradeWorkflowSchemas(); err != nil {
 		log.Printf("[workflow] tool schema upgrade: %v", err)
 	}
+	if err := s.upgradeDelegationDescriptions(); err != nil {
+		log.Printf("[delegation] tool description upgrade: %v", err)
+	}
 	manager, err := workflow.New(s.ctx, filepath.Join(s.m.dir, "workflows"), workflow.DefaultConcurrency, s.runWorkflowTask, s.workflowCompleted)
 	if err != nil {
 		log.Printf("[workflow] init: %v", err)
@@ -80,7 +83,7 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 	// A workflow task inherits the exact ChatAgent selected by its parent
 	// conversation. Its AgentKey still controls the child prompt/tools, but the
 	// provider, profile binding, and global fallback stay those of the current
-	// session. Subtasks have no separate model override.
+	// session. Subagents have no separate model override.
 	ca := s.resolveChatAgent(parent)
 	if ca == nil {
 		return "", workflow.Permanent(fmt.Errorf("%s", s.chatUnavailableReason()))

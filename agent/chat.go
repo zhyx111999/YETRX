@@ -161,7 +161,9 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	if persona := c.personaPrompt(); persona != "" {
 		appendSystem = append(appendSystem, persona)
 	}
-	if HasParentWorkflowPrompt(ctx) && hasTool(tools, "subagents") {
+	if control.Child {
+		appendSystem = append(appendSystem, SubagentContext)
+	} else if HasParentWorkflowPrompt(ctx) && hasTool(tools, "subagents") {
 		// The external plugin persists a hidden user-role message. Native YETRX
 		// keeps the user's transcript untouched and uses a transient system
 		// addendum only when this agent actually exposes the native subagents tool.

@@ -186,7 +186,7 @@ func TestChatFileDescriptionUpgradePreservesCustomTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err = s.upgradeChatFileDescription(); err != nil {
+		if err = s.upgradeDelegationDescriptions(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -200,7 +200,7 @@ func TestChatFileDescriptionUpgradePreservesCustomTool(t *testing.T) {
 	if err = e.pg.UpdateTool("send_file", "用户说明", schema, mustJSON(row.Agents), false); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.upgradeChatFileDescription(); err != nil {
+	if err = s.upgradeDelegationDescriptions(); err != nil {
 		t.Fatal(err)
 	}
 	row, _ = e.pg.GetTool("send_file")

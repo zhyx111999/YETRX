@@ -223,7 +223,7 @@ func (s *Server) toolListTasks() actool.CoreTool {
 // orchestration agent can pick one for spawn_task's llm_profile. Never leaks keys.
 func (s *Server) toolListLLMProfiles() actool.CoreTool {
 	return roTool("list_llm_profiles",
-		"列出可用的 LLM 配置(profile)：id、名称、模型、格式、是否为当前激活配置。用 id 给 spawn_task 的 llm_profile_id 参数指定子任务专属 LLM（如侦察用便宜模型、利用用强模型）。不含 API Key。",
+		"列出可用的 LLM 配置(profile)：id、名称、模型、格式、是否为当前激活配置。仅用于 spawn_task 探索子任务的 llm_profile_id；subagents 子代理始终继承当前对话模型，不支持此覆盖。不含 API Key。",
 		objSchema(map[string]any{}),
 		func(context.Context, json.RawMessage) (actool.Result, error) {
 			profs, err := s.m.pg.ListProfiles()
@@ -242,7 +242,7 @@ func (s *Server) toolListLLMProfiles() actool.CoreTool {
 
 func (s *Server) toolSpawnTask() actool.CoreTool {
 	return wrTool("spawn_task",
-		"新建一个子任务并启动探索引擎，返回 task_id。用于把一件事(如一道题/一个目标)派成独立任务。parent_ref 可选：填当前编排关联的父任务 id 做父子关联。",
+		"新建探索子任务并启动原版探索引擎，返回 task_id：围绕探索目标，由规划者（Planner）持续规划、子任务执行器（Worker）领取探索意图并执行，结果写回探索记录。适合持续推进的探索目标；一次明确的求证、审查或小范围修改请用 subagents 子代理，不要混用。parent_ref 可选，用于关联父探索任务。",
 		objSchema(map[string]any{
 			"description":            strParam("任务描述(简短标题)"),
 			"goal":                   strParam("任务目标(要达成什么)"),

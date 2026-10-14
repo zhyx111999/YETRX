@@ -79,22 +79,22 @@ func (s *Server) sendWorkerMessage(w http.ResponseWriter, r *http.Request) {
 	// instead of a silent no-op. The intent itself must be paused: the UI flow is
 	// interrupt (pause) first, then send.
 	if s.engine.IsDeleting(t.ID) {
-		writeErr(w, http.StatusConflict, "任务正在删除，无法向 Worker 发送消息")
+		writeErr(w, http.StatusConflict, "探索任务正在删除，无法向子任务发送消息")
 		return
 	}
 	lifecycle := t.lifecycleSnapshot()
 	switch {
 	case lifecycle.Paused || s.engine.IsPaused(t.ID):
-		writeErr(w, http.StatusConflict, "任务已暂停，请先恢复任务再向 Worker 发送消息")
+		writeErr(w, http.StatusConflict, "探索任务已暂停，请先恢复探索任务再向子任务发送消息")
 		return
 	case lifecycle.Queued:
-		writeErr(w, http.StatusConflict, "排队中的任务无法向 Worker 发送消息")
+		writeErr(w, http.StatusConflict, "排队中的探索任务无法向子任务发送消息")
 		return
 	case isTerminalStatus(lifecycle.Status):
-		writeErr(w, http.StatusConflict, "终态任务无法向 Worker 发送消息")
+		writeErr(w, http.StatusConflict, "终态探索任务无法向子任务发送消息")
 		return
 	case s.engine.isSettling(t.ID):
-		writeErr(w, http.StatusConflict, "任务正在收尾，无法向 Worker 发送消息")
+		writeErr(w, http.StatusConflict, "探索任务正在收尾，无法向子任务发送消息")
 		return
 	}
 
@@ -105,7 +105,7 @@ func (s *Server) sendWorkerMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if node == nil {
 		if inherited, sourceErr := t.Store.GetNodeWithSources(iid); sourceErr == nil && inherited != nil && inherited.Inherited {
-			writeErr(w, http.StatusConflict, "继承意图为只读，不能发送 Worker 消息")
+			writeErr(w, http.StatusConflict, "继承意图为只读，不能发送子任务消息")
 			return
 		}
 		writeErr(w, http.StatusNotFound, "intent not found")
@@ -116,7 +116,7 @@ func (s *Server) sendWorkerMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if node.State != "paused" {
-		writeErr(w, http.StatusConflict, "仅已暂停的 Worker 可以发送消息，请先暂停")
+		writeErr(w, http.StatusConflict, "仅已暂停的子任务可以发送消息，请先暂停")
 		return
 	}
 	agentMessage, ok := s.prepareChatMentionMessage(w, message)

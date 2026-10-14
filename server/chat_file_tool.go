@@ -14,7 +14,7 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-const chatFileDescription = "将已经生成的本地文件作为可下载附件发送给当前会话用户。文件先复制保存，源文件后续修改或工作树删除不影响下载。支持任意普通文件，大小上限以系统配置中的 Agent 文件发送设置为准；目录请先打包。仅在主对话调用，子任务将文件路径交给主代理审查后发送。"
+const chatFileDescription = "将已经生成的本地文件作为可下载附件发送给当前会话用户。文件先复制保存，源文件后续修改或工作树删除不影响下载。支持任意普通文件，大小上限以系统配置中的 Agent 文件发送设置为准；目录请先打包。仅在主对话调用，子代理将文件路径交给主代理审查后发送。"
 
 func (s *Server) chatFileTools() []actool.CoreTool {
 	return []actool.CoreTool{actool.Build(actool.Spec{
@@ -36,7 +36,7 @@ func (s *Server) sendChatFile(ctx context.Context, input json.RawMessage, tc *ac
 	session := agent.RunInfoFrom(ctx).SessionID
 	id, err := conversationSessionID(session)
 	if err != nil {
-		return actool.Errorf("send_file 需要当前主对话；子任务请报告文件路径，由主代理发送"), nil
+		return actool.Errorf("send_file 需要当前主对话；子代理请报告文件路径，由主代理审查后发送"), nil
 	}
 	conv, err := s.m.pg.GetConversation(id)
 	if err != nil || conv == nil {

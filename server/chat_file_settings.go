@@ -39,11 +39,3 @@ func (s *Server) chatFileMaxMiB() (int64, error) {
 	}
 	return limit, nil
 }
-
-// Only replace the previous built-in text. Custom descriptions, schemas,
-// defaults and bindings remain owned by the user.
-func (s *Server) upgradeChatFileDescription() error {
-	const previous = "将已经生成的本地文件作为可下载附件发送给当前会话用户。文件先复制保存，源文件后续修改或工作树删除不影响下载。支持任意普通文件，单个不超过 128 MiB；目录请先打包。仅在主对话调用，子任务将文件路径交给主代理审查后发送。"
-	_, err := s.m.pg.Exec(`UPDATE tools SET description=$1 WHERE key='send_file' AND system AND description=$2`, chatFileDescription, previous)
-	return err
-}

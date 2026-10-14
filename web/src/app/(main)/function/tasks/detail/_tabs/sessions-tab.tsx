@@ -237,8 +237,8 @@ function fmtDuration(ms: number): string {
 
 const roleMeta = {
   mainagent: { label: "主 Agent", icon: UserIcon },
-  planner: { label: "规划 Planner", icon: BrainIcon },
-  worker: { label: "Workers", icon: RadioIcon },
+  planner: { label: "子任务规划", icon: BrainIcon },
+  worker: { label: "子任务", icon: RadioIcon },
   system: { label: "系统审计", icon: HistoryIcon },
 } as const;
 
@@ -271,7 +271,7 @@ const PLANNER_ID = "s-planner";
 const PLANNER_SESSION: Session = {
   id: PLANNER_ID,
   role: "planner",
-  title: "规划 Planner · 态势研判",
+  title: "子任务规划 · 态势研判",
   status: "running",
   live: true,
   last_activity: "",
@@ -497,7 +497,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         id,
         role: "worker",
         intent_id: id,
-        title: `Worker #${id}`,
+        title: `子任务 #${id}`,
         status: "done",
         live: false,
         last_activity: source.items[0]?.ts ?? "",
@@ -603,25 +603,25 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         const res = await api.controlIntent(taskId, session.intent_id, action, reason, mode);
         if (action === "pause") {
           patchIntentState(session.intent_id, "paused");
-          toast.success(`Worker #${session.intent_id} 已暂停`);
+          toast.success(`子任务 #${session.intent_id} 已暂停`);
         } else if (action === "resume") {
           patchIntentState(session.intent_id, "open");
-          toast.success(`Worker #${session.intent_id} 已恢复，等待重新领取`);
+          toast.success(`子任务 #${session.intent_id} 已恢复，等待重新领取`);
         } else if (mode === "hard") {
           // 真删除:意图及独占下游已物理移除,从列表剔除该行。
           patchIntentState(session.intent_id);
           const d = res.deleted;
           const extra = d ? `（含 ${d.intents} 意图 / ${d.facts} 事实 / ${d.findings} 漏洞）` : "";
-          toast.success(`Worker #${session.intent_id} 及其独占下游已彻底删除${extra}`);
+          toast.success(`子任务 #${session.intent_id} 及其独占下游已彻底删除${extra}`);
           setCancelReason("");
         } else {
           // 假删除:意图置 deleted、记录删除原因,保留节点与产出。
           patchIntentState(session.intent_id, "deleted");
-          toast.success(`Worker #${session.intent_id} 已删除（原因已记录，规划者将据此重新规划）`);
+          toast.success(`子任务 #${session.intent_id} 已删除（原因已记录，规划者将据此重新规划）`);
           setCancelReason("");
         }
       } catch (error) {
-        toast.error(`Worker 操作失败：${(error as Error).message}`);
+        toast.error(`子任务操作失败：${(error as Error).message}`);
       } finally {
         setControllingIntent(null);
         setCancelIntent(null);
@@ -1537,7 +1537,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         patchIntentState(intentId, result.state);
         setWorkerMessage("");
         setWorkerMessageRequestId("");
-        toast.success(`消息已发送给 Worker #${intentId}，已立即继续执行`);
+        toast.success(`消息已发送给子任务 #${intentId}，已立即继续执行`);
       })
       .catch((error) => {
         toast.error(`发送失败：${(error as Error).message || "请稍后重试"}`);
@@ -1586,7 +1586,12 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                 <ChevronDownIcon
                   className={cn("size-3.5 shrink-0 transition-transform lg:hidden", !listOpen && "-rotate-90")}
                 />
-                <span className="shrink-0">会话列表</span>
+                <span
+                  className="shrink-0"
+                  title="探索任务内的规划与子任务执行会话；独立求证、审查或小范围改写请在对话中使用 subagents 子代理"
+                >
+                  探索会话
+                </span>
                 {!listOpen && (
                   <>
                     <span className="min-w-0 truncate text-foreground lg:hidden" title={activeDisplayTitle}>
@@ -1716,14 +1721,14 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                         ) : (
                           <RotateCwIcon className="size-3.5" />
                         )}
-                        加载更早的 Worker
+                        加载更早的子任务
                       </button>
                     )}
                   </div>
                 );
               })}
               {mainLoaded && !workerSessions.length && (
-                <div className="px-2 py-1 text-xs text-muted-foreground">暂无运行中的 Worker 会话。</div>
+                <div className="px-2 py-1 text-xs text-muted-foreground">暂无运行中的子任务会话。</div>
               )}
             </div>
           </ScrollArea>
@@ -1732,7 +1737,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         {/* Right: transcript */}
         <SideQuestionWorkspace
           side={side}
-          label={active.role === "worker" ? `Worker #${active.intent_id} · ${activeDisplayTitle}` : activeDisplayTitle}
+          label={active.role === "worker" ? `子任务 #${active.intent_id} · ${activeDisplayTitle}` : activeDisplayTitle}
         >
           <div className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden rounded-lg border bg-card">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-2 sm:px-4 sm:py-2.5">
@@ -1741,7 +1746,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                 const meta = isWorker ? sessionMeta.get(active.id) : undefined;
                 // Worker: the intent moved into the transcript as a message, so the
                 // header shows a stable generic label (intent JSON stays on hover).
-                const title = isWorker ? "Worker 执行会话" : active.title;
+                const title = isWorker ? "子任务执行会话" : active.title;
                 const titleEl = <span className="min-w-0 truncate text-sm font-medium">{title}</span>;
                 return meta?.json ? (
                   <Tooltip>
@@ -2003,8 +2008,8 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                   <MentionTextarea
                     inputGroup
                     rows={1}
-                    aria-label={`给 Worker #${active.intent_id} 发消息`}
-                    placeholder={`给 Worker #${active.intent_id} 发消息，@ 引用记录，调整执行方向…`}
+                    aria-label={`给子任务 #${active.intent_id} 发消息`}
+                    placeholder={`给子任务 #${active.intent_id} 发消息，@ 引用记录，调整执行方向…`}
                     value={workerMessage}
                     onValueChange={(value) => {
                       setWorkerMessage(value);
@@ -2040,8 +2045,8 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                         variant="destructive"
                         onClick={() => void controlWorker(active, "pause")}
                         disabled={controllingIntent === active.intent_id}
-                        title="暂停当前 Worker"
-                        aria-label="暂停当前 Worker"
+                        title="暂停当前子任务"
+                        aria-label="暂停当前子任务"
                       >
                         {controllingIntent === active.intent_id ? (
                           <Loader2Icon className="animate-spin" />
@@ -2107,7 +2112,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         >
           <AlertDialogContent className="max-w-[min(32rem,calc(100vw-2rem))]">
             <AlertDialogHeader>
-              <AlertDialogTitle>删除 Worker #{cancelIntent?.intent_id}？</AlertDialogTitle>
+              <AlertDialogTitle>删除子任务 #{cancelIntent?.intent_id}？</AlertDialogTitle>
               <AlertDialogDescription className="break-words whitespace-normal">
                 {deleteMode === "hard" ? (
                   <>
