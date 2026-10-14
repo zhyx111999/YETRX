@@ -1,6 +1,7 @@
 name: conversation-stream
 on:
   push:
+    branches: ["**"]
     paths:
       - "agent/**"
       - "server/**"

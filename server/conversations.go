@@ -393,8 +393,8 @@ func (s *Server) pgStopConversation(w http.ResponseWriter, r *http.Request) {
 }
 
 // pgSendConversationMessage persists the human turn, then runs the agent in the
-// background (steps stream to conversation_activities, polled by the client). One
-// in-flight turn per conversation.
+// background. SSE follows its draft and durable steps. One in-flight turn per
+// conversation.
 func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Request) {
 	pg, c, ok := s.convByID(w, r)
 	if !ok {

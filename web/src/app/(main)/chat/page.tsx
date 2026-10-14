@@ -627,9 +627,14 @@ function ChatView({
   React.useEffect(() => {
     const vp = viewport();
     if (!vp) return;
+    let lastTop = vp.scrollTop;
     const onScroll = () => {
       if (approvalFocus.state && !focusHistory.ready) return;
-      atBottomRef.current = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 60;
+      const nearBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 60;
+      // A queued scroll event can arrive after the next text fragment grew the
+      // content. Only scrolling upward unpins; growth itself must keep following.
+      if (nearBottom || vp.scrollTop < lastTop) atBottomRef.current = nearBottom;
+      lastTop = vp.scrollTop;
       if (vp.scrollTop <= 80) void loadEarlier(); // near top → pull an older page
     };
     vp.addEventListener("scroll", onScroll, { passive: true });

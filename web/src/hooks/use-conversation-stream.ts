@@ -26,9 +26,10 @@ export function useConversationStream(
     let connected = false;
     let draft: Activity | null = null;
     let timer: ReturnType<typeof setTimeout>;
-    const stream = process.env.NEXT_PUBLIC_MOCK === "1"
-      ? null
-      : new EventSource(sseUrl(`/api/conversations/${id}/stream?since=${cursor.current}`));
+    const stream =
+      process.env.NEXT_PUBLIC_MOCK === "1"
+        ? null
+        : new EventSource(sseUrl(`/api/conversations/${id}/stream?since=${cursor.current}`));
 
     // Keep the existing incremental API as compensation while SSE is unavailable.
     // A late poll must not overwrite a newer live snapshot after reconnection.
@@ -37,7 +38,8 @@ export function useConversationStream(
         if (!connected) {
           const data = await api.conversationMessages(id, cursor.current);
           if (!live || connected) return;
-          if (!data.running || data.items.some((item) => ["text", "thinking", "result"].includes(item.kind))) draft = null;
+          if (!data.running || data.items.some((item) => ["text", "thinking", "result"].includes(item.kind)))
+            draft = null;
           cursor.current = Math.max(cursor.current, data.cursor);
           receive({ ...data, draft });
         }
@@ -49,8 +51,12 @@ export function useConversationStream(
     };
     timer = setTimeout(() => void poll(), 2000);
     if (stream) {
-      stream.onopen = () => { connected = true; };
-      stream.onerror = () => { connected = false; };
+      stream.onopen = () => {
+        connected = true;
+      };
+      stream.onerror = () => {
+        connected = false;
+      };
       stream.addEventListener("snapshot", (event) => {
         if (!live) return;
         try {
