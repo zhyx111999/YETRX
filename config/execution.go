@@ -28,8 +28,8 @@ type ExecutionSettings struct {
 
 func Execution() (ExecutionSettings, error) {
 	c := ExecutionSettings{
-		Enabled: true, MaxSessions: 8, MemoryMiB: 512, CPUs: 1, Processes: 128,
-		MaxResources: 16, ResourceMemoryMiB: 384, ResourceCPUs: 1, ResourceProcesses: 128,
+		Enabled: true, MaxSessions: 32, MemoryMiB: 512, CPUs: 1, Processes: 128,
+		MaxResources: 64, ResourceMemoryMiB: 384, ResourceCPUs: 1, ResourceProcesses: 128,
 		TotalMemoryMiB: 3072, TotalCPUs: 4, TotalProcesses: 1024,
 	}
 	if raw, ok := os.LookupEnv("ARTEX_EXECUTION_ENABLED"); ok {

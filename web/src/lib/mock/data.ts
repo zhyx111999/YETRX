@@ -3318,7 +3318,7 @@ export const settings: Settings = {
   web_search_proxy: "",
   global_proxy: "",
   python_interpreter: "/usr/bin/python3",
-  workers: 3,
+  workers: 8,
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
   noa_compaction: false,

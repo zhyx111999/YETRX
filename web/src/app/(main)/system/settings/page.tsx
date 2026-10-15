@@ -38,7 +38,7 @@ export default function SystemSettingsPage() {
   const [saving, setSaving] = React.useState(false);
   const [savingKey, setSavingKey] = React.useState(false);
   const [pyInterp, setPyInterp] = React.useState("");
-  const [workers, setWorkers] = React.useState("3");
+  const [workers, setWorkers] = React.useState("8");
   const [savingWorkers, setSavingWorkers] = React.useState(false);
   // 操作约束注入范围(默认都开)。
   const [injectPlanner, setInjectPlanner] = React.useState(true);
@@ -58,7 +58,7 @@ export default function SystemSettingsPage() {
     setProxyInput(s.web_search_proxy ?? "");
     setGlobalProxyInput(s.global_proxy ?? "");
     setPyInterp(s.python_interpreter ?? "");
-    setWorkers(String(s.workers ?? 3));
+    setWorkers(String(s.workers ?? 8));
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
@@ -660,10 +660,10 @@ export default function SystemSettingsPage() {
               子任务执行并发（探索）
             </CardTitle>
             <CardDescription>
-              每个探索任务的执行槽位数（Worker，默认 3），不是累计子任务数量。规划者持续规划，执行器逐条领取探索意图并执行；并发越高，消耗越高。修改后
+              每个探索任务的执行槽位数（Worker，默认 8），不是累计子任务数量。规划者持续规划，执行器逐条领取探索意图并执行；并发越高，消耗越高。修改后
               <b>对之后启动的探索任务生效</b>，正在运行的任务不受影响。
               <br />
-              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验。每个对话独享 4 个子代理并发名额，同一对话内多批运行共用，不同对话互不占用。
+              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验。每个对话独享 16 个子代理并发名额，同一对话内多批运行共用；不同对话的调度名额独立，但所有角色仍受全局执行池和资源预算限制。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">

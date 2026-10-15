@@ -199,7 +199,7 @@ supervisor there. No unrelated process is moved. **This Linux test has not been
 executed on the Windows development host; cross-compilation is not acceptance.**
 
 Production callers can use 512 MiB/1 core/128 tasks per Agent and
-384 MiB/1 core/128 tasks per helper, with 8 Agents/16 helpers as their scheduling
+384 MiB/1 core/128 tasks per helper, with 32 Agents/64 helpers as their scheduling
 defaults. The aggregate 3 GiB/4-core/1024-task budget is shared, not the sum of
 local maxima; Linux tasks include threads. This package never silently lowers
 tool concurrency to fit a process cap. OS admission failures remain explicit.

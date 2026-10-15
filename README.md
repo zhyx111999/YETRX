@@ -24,8 +24,8 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 
 | 名称 | 定位与入口 | 标识与并发 |
 | --- | --- | --- |
-| **子任务（探索）** | 原版 Planner/Worker 探索机制。围绕探索目标持续规划，执行器领取探索意图、执行并写回探索记录；通过任务页面或 `spawn_task` 等探索入口使用 | 探索任务 `task_id`、执行事项 `intent_id`；每个探索任务默认 3 个 Worker 执行槽位，在「系统配置 → 子任务执行并发（探索）」调整 |
-| **子代理（对话）** | `subagents` 按需启动独立会话，一次完成一件明确的求证、审查或小范围改写；报告实际操作、依据与结果，由主对话核验、决定是否采纳或合并 | `run_id` / `label`，用 `subagents_control` 管理；每个父对话独享 4 个并发名额，同一对话的多批运行共用；不同对话互不占用，与探索执行槽位独立 |
+| **子任务（探索）** | 原版 Planner/Worker 探索机制。围绕探索目标持续规划，执行器领取探索意图、执行并写回探索记录；通过任务页面或 `spawn_task` 等探索入口使用 | 探索任务 `task_id`、执行事项 `intent_id`；每个探索任务默认 8 个 Worker 执行槽位，在「系统配置 → 子任务执行并发（探索）」调整 |
+| **子代理（对话）** | `subagents` 按需启动独立会话，一次完成一件明确的求证、审查或小范围改写；报告实际操作、依据与结果，由主对话核验、决定是否采纳或合并 | `run_id` / `label`，用 `subagents_control` 管理；每个父对话独享 16 个并发名额，同一对话的多批运行共用；不同对话的调度名额独立，仍受全局执行池限制，与探索执行槽位独立 |
 
 探索根任务仍称「探索任务」，内部领取的一条探索意图是一个子任务执行事项；Worker 是可复用的执行槽位，不是累计创建的任务数。两套机制均保留，接口、ID、历史、调度逻辑和资源绑定不因显示名称改变而迁移或重置。简短问答和一两步修改直接完成，不必派发子代理。
 
@@ -44,7 +44,7 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 
 独立任务并行，有依赖的任务按顺序执行；前置任务失败时后续任务标记 blocked。启动立即返回 `run_id`，完成后结果自动回到根对话；当前对话正在运行时，子代理执行记录和结果卡片统一排队：文字正在生成时不插入；当前这次模型响应结束的边界立即显示卡片，同一次对话里之后的模型请求在工具结果之后读取结果，不取消、不重跑正在执行的工具；若已在执行工具而没有流式文字，结果随到随显示并供下一次请求读取。最后一次响应之后没有后续请求时，沿用本轮结束后的自动跟进。无须轮询或再发一条消息。停止主聊天只中断当前回复；子代理继续执行并回传，未被模型读取的结果保留，在停止后自动跟进。使用 `subagents_control stop` 单独停止指定运行；删除会话会停止其子代理并清理回传队列。
 
-控制动作：`list`、`status`、`read`、`stop`、`resume`、`message`。`read` 一次读取一个 label，最多末尾 8000 字符。默认每个父对话并发 4、每批最多 32 项；子代理硬性禁止调用 `subagents`、`subagents_control`、`spawn_task` 再次委派，追加工作交回主对话；探索内部 Planner → Worker 保持原有调度。状态保存在数据目录的 `workflows/`。
+控制动作：`list`、`status`、`read`、`stop`、`resume`、`message`。`read` 一次读取一个 label，最多末尾 8000 字符。默认每个父对话并发 16、每批最多 32 项；子代理硬性禁止调用 `subagents`、`subagents_control`、`spawn_task` 再次委派，追加工作交回主对话；探索内部 Planner → Worker 保持原有调度。状态保存在数据目录的 `workflows/`。
 
 | 机制 | 当前行为 |
 | --- | --- |
@@ -58,7 +58,7 @@ Agent 是内置的一种普通对话模式，和其他模式共用 `ChatAgent`�
 
 同次任务自动重试共享其工作树；恢复后重新执行的任务创建新工作树。`keep_worktree:false` 在执行器退出后删除该任务的工作树和分支。独立子会话不复制父完整历史。服务重启将仍运行的任务标为 interrupted，普通中断需手动恢复；resume 不恢复 Go 调用栈，也不保证工具副作用只执行一次。
 
-五项机制参照当前 `zhyx111999/pi-workflows-lean` 源码，以原生 Go/ChatAgent 实现；模型仍继承父会话，并发数仍为 4，但按父对话分别计算，流程使用原生 DAG。详细契约和示例见 [workflow-authoring](skills/workflow-authoring/SKILL.md)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+五项机制参照当前 `zhyx111999/pi-workflows-lean` 源码，以原生 Go/ChatAgent 实现；模型仍继承父会话，默认并发数为 16，按父对话分别计算，流程使用原生 DAG。详细契约和示例见 [workflow-authoring](skills/workflow-authoring/SKILL.md)，第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 三个说明技能 `workflow-authoring`、`workflow-patterns`、`subagents-setup` 位于统一 `skills/` 中，已按原生工具重写。流程使用任务依赖，不执行旧 pi 的 JavaScript 工作流脚本。没有安装 Tavily。
 
@@ -99,11 +99,13 @@ Linux 需要 cgroup v2 与 systemd `Delegate=yes`，服务使用 `KillMode=contr
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `ARTEX_EXECUTION_ENABLED` | `true` | 启用进程隔离 |
-| `ARTEX_EXECUTION_MAX_SESSIONS` | `8` | 同时运行的 Agent 会话上限 |
+| `ARTEX_EXECUTION_MAX_SESSIONS` | `32` | 所有角色共用的 Agent 会话总上限 |
 | `ARTEX_EXECUTION_MEMORY_MIB` / `ARTEX_EXECUTION_CPUS` / `ARTEX_EXECUTION_PROCESSES` | `512` / `1` / `128` | 每个 Agent 及其后代的硬限制 |
-| `ARTEX_RESOURCE_MAX_WORKERS` | `16` | MCP 与管理页测试 helper 总数 |
+| `ARTEX_RESOURCE_MAX_WORKERS` | `64` | MCP 与管理页测试 helper 总数 |
 | `ARTEX_RESOURCE_MEMORY_MIB` / `ARTEX_RESOURCE_CPUS` / `ARTEX_RESOURCE_PROCESSES` | `384` / `1` / `128` | 每个 helper 及其后代的硬限制 |
 | `ARTEX_EXECUTION_TOTAL_MEMORY_MIB` / `ARTEX_EXECUTION_TOTAL_CPUS` / `ARTEX_EXECUTION_TOTAL_PROCESSES` | `3072` / `4` / `1024` | 所有 Agent/helper 的聚合硬限制，网站进程不计入 |
+
+并发数字是准入上限，不预先分配进程或内存，也不增加聚合资源预算。已保存的 Worker 设置和环境变量覆盖继续生效；探索根任务的并发开关与上限不变。
 
 CPU 值以逻辑核心为单位，Linux 的进程数同时计算线程。容量满时明确返回忙碌；同一 transcript 不允许并发写入，真实进程树退出后才释放容量。主停止仍只取消当前会话，后台任务由各自取消入口控制。共享目录组织文件；此功能不增加文件系统或网络权限沙箱。
 

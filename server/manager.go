@@ -281,7 +281,7 @@ const (
 	// key, so it only works on an anthropic-format profile pointed at DeepSeek.
 	deepSeekWebSearchBackend = "deepseek"
 	// defaultWorkers is the concurrent work-agent count when the setting is unset.
-	defaultWorkers = 3
+	defaultWorkers = 8
 	// defaultConcurrencyLimit is the simultaneous-running-task cap when the feature
 	// is enabled but no explicit limit was saved.
 	defaultConcurrencyLimit = 5
@@ -314,7 +314,7 @@ func (m *Manager) SetConcurrency(enabled bool, limit int) error {
 	return m.pg.SetSetting(settingConcurrencyOn, strconv.FormatBool(enabled))
 }
 
-// Workers returns the configured concurrent work-agent count (default 3). Read
+// Workers returns the configured concurrent work-agent count (default 8). Read
 // per-task at engine.Run, so a change applies to tasks started afterwards.
 func (m *Manager) Workers() int {
 	v, ok, err := m.pg.GetSetting(settingWorkers)

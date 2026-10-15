@@ -28,7 +28,7 @@ const (
 	MaxTasks           = 32 // tasks per run
 	MaxDepth           = 1  // children cannot dispatch or control workflows
 	MaxAgentRetries    = 3
-	DefaultConcurrency = 4    // default limit of simultaneously running tasks per owner session
+	DefaultConcurrency = 16   // default limit of simultaneously running tasks per owner session
 	MaxReadChars       = 8000 // Read never returns more than this many characters
 )
 

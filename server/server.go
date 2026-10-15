@@ -3328,7 +3328,7 @@ func (s *Server) settingsPayload() (map[string]any, error) {
 		"global_proxy":             s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
 		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
 		"chat_file_max_mib":        fileMaxMiB,
-		"workers":                  s.m.Workers(), // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		"workers":                  s.m.Workers(), // Worker slots per exploration (default 8); applies to new tasks.
 		"task_concurrency_enabled": concOn,        // 任务并发上限开关(默认关)
 		"task_concurrency_limit":   concLimit,     // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时

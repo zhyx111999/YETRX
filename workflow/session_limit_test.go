@@ -8,9 +8,40 @@ import (
 	"time"
 )
 
-// The default is deliberately small; these tests use the larger figure a
-// deployment may configure, to show the limit is per session and not baked in.
+// Explicit limits and the default both apply per owner, across all of its runs.
 const sessionLimit = 16
+
+func TestDefaultConcurrencyAdmitsSixteenPerParent(t *testing.T) {
+	if DefaultConcurrency != 16 {
+		t.Fatalf("default concurrency = %d, want 16", DefaultConcurrency)
+	}
+	release := make(chan struct{})
+	p := newProbe()
+	e := open(t, t.TempDir(), 0, p.run(block(release)))
+	for _, owner := range []string{"conv-1", "conv-2"} {
+		id := e.start(owner, independent(17)...)
+		eventually(t, "sixteen active tasks", func() bool { return p.runningFor(owner) == 16 })
+		var pending int
+		for _, task := range e.status(owner, id).Tasks {
+			if task.Status == Pending {
+				pending++
+			}
+		}
+		if pending != 1 {
+			t.Fatalf("%s has %d pending tasks, want 1", owner, pending)
+		}
+	}
+	close(release)
+	for range 2 {
+		wantStatus(t, e.next(), Succeeded, nil)
+	}
+	for _, owner := range []string{"conv-1", "conv-2"} {
+		if peak := p.peakFor(owner); peak != 16 {
+			t.Errorf("%s peak = %d, want 16", owner, peak)
+		}
+	}
+	eventually(t, "all default slots released", func() bool { return e.m.limiter.sessions() == 0 })
+}
 
 func TestEachSessionReachesTheConfiguredLimit(t *testing.T) {
 	const queued = 4

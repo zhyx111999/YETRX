@@ -939,7 +939,7 @@ export interface Settings {
   global_proxy?: string;
   python_interpreter?: string; // 自定义脚本工具的 python 解释器路径(空=运行时检测)
   chat_file_max_mib?: number; // Agent 发文件的单文件上限（MiB），默认 128；0 表示不限制
-  workers?: number; // 每个探索任务的子任务执行槽位(默认3)；不控制 subagents 子代理
+  workers?: number; // Per-exploration Worker slots (default 8), independent of subagents.
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
   task_concurrency_enabled?: boolean; // 默认 false
   task_concurrency_limit?: number; // 开启后默认 5

@@ -12,7 +12,11 @@ func TestExecutionSettingsRequireExplicitValidLimits(t *testing.T) {
 		_ = os.Unsetenv(key)
 	}
 	defaults, err := Execution()
-	if err != nil || !defaults.Enabled || defaults.MemoryMiB <= 0 || defaults.ResourceMemoryMiB <= 0 {
+	if err != nil || defaults != (ExecutionSettings{
+		Enabled: true, MaxSessions: 32, MemoryMiB: 512, CPUs: 1, Processes: 128,
+		MaxResources: 64, ResourceMemoryMiB: 384, ResourceCPUs: 1, ResourceProcesses: 128,
+		TotalMemoryMiB: 3072, TotalCPUs: 4, TotalProcesses: 1024,
+	}) {
 		t.Fatalf("default limits: %+v %v", defaults, err)
 	}
 	for _, item := range []struct{ key, value string }{
@@ -26,6 +30,12 @@ func TestExecutionSettingsRequireExplicitValidLimits(t *testing.T) {
 				t.Fatal("invalid setting accepted")
 			}
 		})
+	}
+	t.Setenv("ARTEX_EXECUTION_MAX_SESSIONS", "7")
+	t.Setenv("ARTEX_RESOURCE_MAX_WORKERS", "12")
+	overridden, err := Execution()
+	if err != nil || overridden.MaxSessions != 7 || overridden.MaxResources != 12 || overridden.TotalMemoryMiB != defaults.TotalMemoryMiB || overridden.TotalCPUs != defaults.TotalCPUs || overridden.TotalProcesses != defaults.TotalProcesses {
+		t.Fatalf("explicit capacity overrides: %+v %v", overridden, err)
 	}
 	t.Setenv("ARTEX_EXECUTION_ENABLED", "false")
 	c, err := Execution()
