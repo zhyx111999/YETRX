@@ -38,10 +38,29 @@ const (
 )
 
 func newTree(cmd *exec.Cmd, l Limits) (*tree, error) {
+	// prepareTree holds budget.Lock while choosing the parent's CPU capacity.
+	capacity := float64(windows.GetActiveProcessorCount(windows.ALL_PROCESSOR_GROUPS))
+	if budget.configured && budget.limits.CPUs > 0 {
+		// Windows nested CPU rates are relative to the parent's configured rate.
+		capacity *= float64(cpuRate(budget.limits.CPUs, int(capacity))) / 10000
+	}
+	t, err := newJob(l, capacity)
+	if err != nil {
+		return nil, err
+	}
+	// Created suspended so both aggregate and tree limits precede execution.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_SUSPENDED}
+	return t, nil
+}
+
+func newJob(l Limits, capacity float64) (*tree, error) {
+	if capacity < 1e-9 {
+		capacity = 1
+	}
 	if uint64(l.Processes) > math.MaxUint32 {
 		return nil, fmt.Errorf("%w: process limit exceeds Windows range", ErrLimitsUnavailable)
 	}
-	if l.CPUs > 0 && l.CPUs/float64(windows.GetActiveProcessorCount(windows.ALL_PROCESSOR_GROUPS))*10000 < 1 {
+	if l.CPUs > 0 && l.CPUs/capacity*10000 < 1 {
 		return nil, fmt.Errorf("%w: CPU limit below Windows resolution", ErrLimitsUnavailable)
 	}
 	if uint64(l.MemoryBytes) > uint64(^uintptr(0)) {
@@ -70,7 +89,7 @@ func newTree(cmd *exec.Cmd, l Limits) (*tree, error) {
 	if l.CPUs > 0 {
 		rate := cpuRateControl{
 			ControlFlags: cpuRateEnable | cpuRateHardCap,
-			CpuRate:      cpuRate(l.CPUs, int(windows.GetActiveProcessorCount(windows.ALL_PROCESSOR_GROUPS))),
+			CpuRate:      cpuRateForCapacity(l.CPUs, capacity),
 		}
 		if err := t.set(windows.JobObjectCpuRateControlInformation, unsafe.Pointer(&rate), unsafe.Sizeof(rate)); err != nil {
 			t.close()
@@ -78,8 +97,6 @@ func newTree(cmd *exec.Cmd, l Limits) (*tree, error) {
 		}
 	}
 
-	// Created suspended so the child cannot run before it is inside the job.
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_SUSPENDED}
 	return t, nil
 }
 
@@ -89,7 +106,11 @@ func cpuRate(cpus float64, logical int) uint32 {
 	if logical < 1 {
 		logical = 1
 	}
-	return uint32(min(10000, max(1, math.Floor(cpus/float64(logical)*10000))))
+	return cpuRateForCapacity(cpus, float64(logical))
+}
+
+func cpuRateForCapacity(cpus, capacity float64) uint32 {
+	return uint32(min(10000, max(1, math.Floor(cpus/capacity*10000))))
 }
 
 func (t *tree) set(class uint32, info unsafe.Pointer, size uintptr) error {
@@ -118,6 +139,14 @@ func (t *tree) adopt(pid uint32) error {
 		return err
 	}
 	defer windows.CloseHandle(h)
+	budget.Lock()
+	parent := budgetJob
+	budget.Unlock()
+	if parent != nil {
+		if err := windows.AssignProcessToJobObject(parent.job, h); err != nil {
+			return fmt.Errorf("assign aggregate job: %w", err)
+		}
+	}
 	if err := windows.AssignProcessToJobObject(t.job, h); err != nil {
 		return err
 	}

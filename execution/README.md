@@ -2,7 +2,7 @@
 
 This package is independent of agent/server/cmd and application initialization.
 No application configuration, database, model provider, or logging backend is
-loaded by the tests. The public API is unchanged:
+loaded by the tests. The public API includes:
 
 ```go
 type Handler func(context.Context, string, json.RawMessage,
@@ -14,6 +14,7 @@ func Start(context.Context, string, []string, []string, Limits, Handler) (*Proce
 // Process: Peer *Peer, PID(), Wait(), Close(), StderrTail()
 type Limits struct { MemoryBytes int64; CPUs float64; Processes int }
 func InitCgroup() error
+func ConfigureBudget(Limits) error
 ```
 
 ## Startup contract
@@ -43,7 +44,8 @@ func InitCgroup() error
   fail after the move; do initialization before admitting concurrent work.
   An error is fatal to deployment with limits. A preexisting process in the
   delegation root can prevent enabling controllers.
-* Each subsequent Linux Start creates a sibling `exec-<pid>-<sequence>` cgroup,
+* Without an aggregate budget, each subsequent Linux Start creates a sibling
+  `exec-<pid>-<sequence>` cgroup,
   configures limits, then uses clone3(CLONE_INTO_CGROUP). There is no spawn-then-
   move interval. Unsupported clone3, missing controllers, permissions, and limits
   below OS resolution return `ErrLimitsUnavailable`; no unlimited retry occurs.
@@ -118,9 +120,9 @@ and real process pipes), large frames, truncated frames, EOF, unknown methods,
 bounded replies/events/control queues, short writes, actual process crashes and
 nonzero status, one runner surviving another's crash, bounded stderr, stubborn
 child/grandchild cleanup, actual Windows active-process-limit denial, nested
-Job startup, and queried CPU/memory/KILL_ON_CLOSE settings. Windows memory is
-queried rather than exhausted; CPU tests check the installed cap rather than
-using noisy wall-time benchmarks.
+Job startup, and queried CPU/memory/KILL_ON_CLOSE settings. Per-tree memory limits are queried; the aggregate test below also exercises
+actual commit denial. CPU tests check the installed cap rather than using noisy
+wall-time benchmarks.
 
 ## Linux deployment acceptance (must run on target)
 
@@ -150,14 +152,54 @@ when acceptance is complete. Do not run the opt-in test inside the live service.
 Linux/Darwin cross-compilation proves compilation only. Darwin resource limits
 are unsupported and neither Darwin execution nor Linux limits were tested here.
 
-## Aggregate production budget handoff
+## Aggregate execution budget
 
-Per-runner Limits do not impose an aggregate budget across runners. Production
-must add an aggregate parent before admitting runners. The Linux private state
-is `cgParent string`, protected by `cgMu`, in cgroup_linux.go. InitCgroup sets it
-to the delegation root; newCgroup creates exec-* children there. The integrating
-supervisor can create/configure execution-workers below that root, then update
-cgParent under cgMu before any Start calls. execution-manager remains its sibling.
-An aggregate ConfigureBudget API is outside this commit and is being implemented
-by the integrating supervisor; do not treat per-runner limits as website resource
-reservation.
+Call `InitCgroup()` then `ConfigureBudget(Limits{MemoryBytes: 3 << 30,
+CPUs: 4, Processes: 1024})` before the first `Start`. ConfigureBudget excludes
+this supervisor/website and covers every subsequent runner and descendant,
+even when a runner has zero local Limits. Zero dimensions are unlimited;
+all-zero configuration requires no OS support. Identical configurations are
+idempotent. Changing an installed budget (including disabling it), or enabling
+one after any runner has been prepared, returns `ErrLimitsUnavailable`, even
+after runners close. Invalid negative/nonfinite limits return validation errors.
+Failed OS setup returns `ErrLimitsUnavailable`; callers must handle failures.
+No aggregate runtime hints or automatic concurrency reductions are applied.
+
+Linux creates an empty `execution-workers` inner node below the delegation root,
+writes memory.max/cpu.max/pids.max, and enables memory/cpu/pids subtree controllers.
+`execution-manager` stays its sibling; every new exec-* goes below workers.
+Repeated InitCgroup preserves this parent. Existing exec-* nodes or an existing
+workers node cause setup to fail without adopting or moving any processes.
+The aggregate memory.oom.group is 0 and each runner's is 1, so aggregate OOM
+selects a runner tree instead of killing all runners as one group. The workers
+node remains for the delegated service lifetime; systemd removes it on teardown.
+
+Windows retains a shared, non-inheritable parent Job until supervisor exit,
+with KILL_ON_JOB_CLOSE and aggregate commit-memory/CPU/process caps. Each child
+is created suspended, assigned first to that parent then to its individual Job,
+and resumed only after both assignments succeed. Closing a runner closes only
+its own Job. Nested CPU rates account for the parent's installed CPU capacity.
+Other platforms reject nonzero budgets with `ErrLimitsUnavailable`.
+
+The Windows `TestWindowsAggregateBudget` queries limits and membership, verifies
+the supervisor is excluded, and runs two actual runners: each fits individually,
+but combined process creation and native committed-memory requests exceed the
+shared cap and are refused. Closing one leaves its sibling alive and frees memory
+budget for it. Memory allocation bypasses Go hints. Race-runtime overhead is
+included in the test budget. Startup-state tests use isolated supervisors.
+
+Linux `TestLinuxAggregateBudget` is opt-in with `EXECUTION_TEST_CGROUP=1`.
+Use the disposable systemd-run invocation above, optionally adding
+`-test.run=^TestLinuxAggregateBudget$`. It checks two runner parent paths,
+aggregate and local memory/CPU/pids values, subtree controllers, empty workers
+node, OOM policies, the manager sibling, InitCgroup reentry, configuration
+immutability, and closing one runner without affecting the other. The outer
+test harness first enters execution-manager, then launches an isolated test
+supervisor there. No unrelated process is moved. **This Linux test has not been
+executed on the Windows development host; cross-compilation is not acceptance.**
+
+Production callers can use 512 MiB/1 core/128 tasks per Agent and
+384 MiB/1 core/128 tasks per helper, with 8 Agents/16 helpers as their scheduling
+defaults. The aggregate 3 GiB/4-core/1024-task budget is shared, not the sum of
+local maxima; Linux tasks include threads. This package never silently lowers
+tool concurrency to fit a process cap. OS admission failures remain explicit.

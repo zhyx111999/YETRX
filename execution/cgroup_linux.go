@@ -56,6 +56,9 @@ func unavailable(err error, format string, a ...any) error {
 func InitCgroup() error {
 	cgMu.Lock()
 	defer cgMu.Unlock()
+	if cgParent != "" {
+		return nil // Preserve the workers parent after ConfigureBudget.
+	}
 	own, err := ownCgroup()
 	if err != nil {
 		return err
@@ -174,14 +177,15 @@ func (c *cgroup) configure(l Limits) error {
 		if err := set("memory.max", strconv.FormatInt(l.MemoryBytes, 10)); err != nil {
 			return err
 		}
-		// No swap escape hatch, and an OOM kills the whole tree rather than one victim.
-		// Both files are absent on kernels without swap accounting / oom.group.
-		for file, val := range map[string]string{"memory.swap.max": "0", "memory.oom.group": "1"} {
-			if err := set(file, val); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
+		if err := set("memory.swap.max", "0"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 	}
+	// Every runner is an OOM unit, including those with unlimited local memory.
+	if err := set("memory.oom.group", "1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
 	if l.CPUs > 0 {
 		quota := int64(math.Floor(l.CPUs * cpuPeriod))
 		if quota < 1000 || l.CPUs*cpuPeriod >= float64(math.MaxInt64) {

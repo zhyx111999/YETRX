@@ -84,7 +84,7 @@ func Start(ctx context.Context, executable string, args []string, env []string, 
 	cmd := exec.Command(executable, args...)
 	cmd.Env = withRuntimeHints(env, limits)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pipes.inR, pipes.outW, pipes.errW
-	t, err := newTree(cmd, limits)
+	t, err := prepareTree(cmd, limits)
 	if err != nil {
 		pipes.closeAll()
 		return nil, err
