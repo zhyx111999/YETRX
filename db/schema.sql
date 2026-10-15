@@ -1015,6 +1015,29 @@ CREATE INDEX IF NOT EXISTS idx_conv_act ON conversation_activities(conversation_
 CREATE INDEX IF NOT EXISTS idx_conv_act_tool_call ON conversation_activities(conversation_id, tool_use_id, id)
   WHERE kind IN ('tool_use', 'tool_result');
 
+-- 会话发起的探索任务 → 来源会话的持久关联,以及终态结果向该会话的投递状态。
+-- task_id 故意不设 FK 到 tasks:任务被删除/归档后,仍要把终态(或 deleted)通知投递回会话。
+-- task id 来自 BIGSERIAL 永不复用,悬空 task_id 不会误指向别的任务。
+-- 会话删除时链接随之级联删除,不会向已删会话复活投递。
+-- description/goal 为创建时快照(任务被删或归档清空后仍可用于通知文案)。
+-- result_status 空串=尚未记录结果;activity_id=已写入会话的结果记录(重放时复用,避免重复可见记录);
+-- delivered_at=主模型已确认处理该结果(与写入结果记录分开,崩溃/重放不丢通知)。
+CREATE TABLE IF NOT EXISTS conversation_tasks (
+    task_id         BIGINT PRIMARY KEY,
+    conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    description     TEXT NOT NULL DEFAULT '',
+    goal            TEXT NOT NULL DEFAULT '',
+    result_status   TEXT NOT NULL DEFAULT '',
+    activity_id     BIGINT REFERENCES conversation_activities(id) ON DELETE SET NULL,
+    delivered_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_tasks_conv ON conversation_tasks(conversation_id, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_tasks_undelivered ON conversation_tasks(created_at, task_id)
+  WHERE delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_conversation_tasks_activity ON conversation_tasks(activity_id)
+  WHERE activity_id IS NOT NULL;
+
 -- =====================================================================
 -- J. Agent 触发器
 -- =====================================================================

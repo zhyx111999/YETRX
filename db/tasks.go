@@ -156,6 +156,10 @@ type TaskCreateOptions struct {
 	CoverageEnabled *bool
 	// InterceptRules 是任务级资产拦截规则,创建时随任务在同一事务内写入 task_intercept_rules。
 	InterceptRules []TaskInterceptRuleInput
+	// SourceConversationID 是发起该任务的来源会话(内部选项,0=无来源)。非 0 时在同一事务内
+	// 写入 conversation_tasks;会话不存在/已删除则整个创建回滚并返回 ErrConversationNotFound,
+	// 不会出现任务已开跑而关联缺失的状态。
+	SourceConversationID int64
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
@@ -242,6 +246,11 @@ RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, descripti
 	}
 	if err := insertTaskInterceptRules(tx, t.ID, opts.InterceptRules); err != nil {
 		return nil, err
+	}
+	if opts.SourceConversationID != 0 {
+		if err := insertConversationTask(tx, t.ID, opts.SourceConversationID, description, goal); err != nil {
+			return nil, err
+		}
 	}
 	if len(opts.LLMProfileIDs) == 0 {
 		t.LLMFailoverState = "default"
