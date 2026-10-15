@@ -44,6 +44,7 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools = append(tools, s.platformTools()...) // 全局平台操作工具，按模式绑定
 	tools = append(tools, s.workflowTools()...)
 	tools = append(tools, s.chatFileTools()...)
+	tools = append(tools, s.chatHistoryTools()...)
 	custom, err := s.customTools()
 	if err != nil {
 		log.Printf("[custom-tool] 加载失败: %v", err)
@@ -504,9 +505,11 @@ func (s *Server) seedOrchestrationTools() {
 		}
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, bindings)
 	}
-	for _, t := range append(append(s.platformTools(), s.workflowTools()...), s.chatFileTools()...) {
-		schema, _ := json.Marshal(t.InputSchema())
-		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, agentBindings)
+	for _, group := range [][]actool.CoreTool{s.platformTools(), s.workflowTools(), s.chatFileTools(), s.chatHistoryTools()} {
+		for _, t := range group {
+			schema, _ := json.Marshal(t.InputSchema())
+			_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, agentBindings)
+		}
 	}
 	s.refreshBuiltinToolSchemas()
 	s.seedAgentDefaultBindings()
