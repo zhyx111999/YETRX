@@ -12,7 +12,6 @@ import {
   ClockIcon,
   HistoryIcon,
   Loader2Icon,
-  PaperclipIcon,
   PauseIcon,
   PlusIcon,
   RadioIcon,
@@ -22,13 +21,13 @@ import {
   Trash2Icon,
   UserIcon,
   WifiOffIcon,
-  XIcon,
   ZapOffIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { ChatAttachmentMenu } from "@/components/chat-attachment-menu";
+import { ChatAttachmentPreviews } from "@/components/chat-attachment-previews";
 import { MentionTextarea } from "@/components/mention-textarea";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
@@ -50,9 +49,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useSideQuestions } from "@/hooks/use-side-questions";
 import { api, sseUrl } from "@/lib/api";
-import { filesFromClipboard } from "@/lib/chat-attachments";
+import { filesFromClipboard, withLocalAttachmentFiles } from "@/lib/chat-attachments";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { MOCK } from "@/lib/mock/enabled";
 import { isBtwCommand } from "@/lib/side-questions";
@@ -77,13 +77,6 @@ import { cn } from "@/lib/utils";
 // so fall back to the model id rather than rendering an empty badge.
 function resolutionLabel(r: TaskLLMResolution): string {
   return r.name || r.model || "未命名配置";
-}
-
-// fmtBytes renders a human file size for attachment chips (mirrors transcript.tsx).
-function fmtBytes(n: number): string {
-  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`;
-  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(1)} KB`;
-  return `${n} B`;
 }
 
 // ── Reliability model (see docs/task-session-history-sse-remediation.md) ──────────
@@ -545,18 +538,13 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   const [workerMessageSending, setWorkerMessageSending] = React.useState(false);
   // 方式1 文件上传:选好的附件(已落到任务工作目录 uploads/),随下条消息一起发。
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
-  const [uploading, setUploading] = React.useState(false);
+  const { uploading, upload } = useAttachmentUpload(`task-${taskId}`);
+  React.useEffect(() => setAttachments([]), [taskId]);
   async function pickFiles(files: File[]) {
-    if (files.length === 0 || uploading || mainBusy) return;
-    setUploading(true);
-    try {
-      const r = await api.chatUpload("task", taskId, files);
-      setAttachments((prev) => [...prev, ...r.attachments]);
-    } catch (e) {
-      toast.error(`上传失败：${(e as Error).message}`);
-    } finally {
-      setUploading(false);
-    }
+    if (sending || mainBusy) return;
+    await upload(files, () => api.chatUpload("task", taskId, files), (result) => {
+      setAttachments((prev) => [...prev, ...withLocalAttachmentFiles(result.attachments, files)]);
+    });
   }
 
   // Start a fresh main-agent session: only the segment counter advances — the task's
@@ -1914,37 +1902,16 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             </ScrollArea>
             {isMain ? (
               <div className="border-t p-3">
-                {attachments.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-1.5">
-                    {attachments.map((a) => (
-                      <div
-                        key={a.path}
-                        className="flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs"
-                        title={a.path}
-                      >
-                        <PaperclipIcon className="size-3 shrink-0 text-primary" />
-                        <span className="max-w-[160px] truncate">{a.name}</span>
-                        <span className="text-muted-foreground">{fmtBytes(a.size)}</span>
-                        <button
-                          type="button"
-                          className="ml-0.5 text-muted-foreground hover:text-foreground"
-                          onClick={() => setAttachments((p) => p.filter((x) => x.path !== a.path))}
-                          title="移除"
-                        >
-                          <XIcon className="size-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <ChatAttachmentPreviews
+                  attachments={attachments}
+                  onRemove={(path) => setAttachments((prev) => prev.filter((item) => item.path !== path))}
+                  disabled={sending || mainBusy || uploading}
+                />
                 <InputGroup className="min-h-9 has-disabled:opacity-100">
                   <MentionTextarea
                     inputGroup
                     rows={1}
                     aria-label="给主 Agent 发消息"
-                    placeholder={
-                      mainBusy ? "主 Agent 正在运行，可输入 /btw 提问…" : "给主 Agent 发消息，@ 引用漏洞、资产等…"
-                    }
                     value={input}
                     disabled={sending}
                     onValueChange={setInput}
@@ -2009,7 +1976,6 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                     inputGroup
                     rows={1}
                     aria-label={`给子任务 #${active.intent_id} 发消息`}
-                    placeholder={`给子任务 #${active.intent_id} 发消息，@ 引用记录，调整执行方向…`}
                     value={workerMessage}
                     onValueChange={(value) => {
                       setWorkerMessage(value);

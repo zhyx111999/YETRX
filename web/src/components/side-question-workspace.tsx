@@ -164,7 +164,6 @@ function SidePanel({
             rows={1}
             className={cn("overflow-y-auto", inlineComposer ? "max-h-40 min-h-0" : "max-h-36 min-h-9")}
             aria-label="旁路问题"
-            placeholder="询问当前上下文…"
             value={side.draft}
             maxLength={4000}
             disabled={side.busy}
