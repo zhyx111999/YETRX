@@ -126,6 +126,7 @@ type overriddenTool struct {
 	schema map[string]any
 }
 
+func (o *overriddenTool) UnwrapTool() actool.CoreTool { return o.CoreTool }
 func (o *overriddenTool) Description() string         { return o.desc }
 func (o *overriddenTool) InputSchema() map[string]any { return o.schema }
 
