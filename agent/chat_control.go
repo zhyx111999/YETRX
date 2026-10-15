@@ -9,19 +9,50 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Autumn-27/norma/agentcore"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
 // ChatControl is invocation-local: a cached ChatAgent can concurrently serve
 // ordinary conversations and children without sharing controls or cwd.
+//
+// The three boundary callbacks are the whole contract between a running chat
+// and its host. They take and return plain data only and never mention host
+// types, so a session executor in another process can forward each one as an
+// event (OnPrompt, OnResponseEnd) or request/reply (DrainMessages) over one
+// ordered channel. All run synchronously on the goroutine that drives the
+// model loop; none may wait for the model.
+//
+//   - DrainMessages runs before every provider request, streaming or not.
+//     Empty means send the request. A non-empty batch cancels that request
+//     before it is sent: the strings are joined into ONE user message appended
+//     after the completed tool results, and the loop restarts on the same
+//     session, so the tool-call/tool-result protocol is never split. Until the
+//     OnPrompt that follows, the batch still belongs to the host. If the run
+//     ends first (cancellation, budget, error) the batch was not delivered:
+//     a parent conversation must keep it, a subagent may discard it.
+//   - OnPrompt runs each time the session has accepted a user message into its
+//     history and transcript and is about to run the loop: once for the
+//     original message, then once after each drained batch. Once it returns
+//     that message is irrevocably part of the conversation the model reads.
+//   - OnResponseEnd runs after a model response that requests tool calls has
+//     been recorded completely: all of its activity has been emitted and any
+//     buffered text flushed. It is never called while text is streaming and
+//     not for a final response without tool calls (the turn ends instead).
+//     Tool results of that response may already have been emitted or still be
+//     pending; the tools are never cancelled or re-run because of it.
+//
+// Order around one response:
+//
+//	DrainMessages -> request, streamed text, the response's activity
+//	-> OnResponseEnd (only when it asked for tools; tools may still run)
+//	-> tool results -> DrainMessages -> ...
 type ChatControl struct {
 	WorkingDirectory string
 	Child            bool
 	DrainMessages    func() []string
+	OnPrompt         func()
+	OnResponseEnd    func()
 	RollbackOnError  bool
-	// OnPrompt runs after setup succeeds, immediately before entering Prompt.
-	OnPrompt func()
 }
 type chatControlKey struct{}
 
@@ -135,13 +166,4 @@ func controlledWorkDir(base, session string, control ChatControl) (string, error
 		return "", fmt.Errorf("working directory is not a directory: %s", path)
 	}
 	return path, nil
-}
-
-func controlledSession(opts agentcore.Options, control ChatControl) (*agentcore.Session, promptSession) {
-	if control.DrainMessages == nil {
-		s := agentcore.NewSession(opts)
-		return s, s
-	}
-	steer := newSteeredSession(&opts, control.DrainMessages)
-	return steer.session, steer
 }

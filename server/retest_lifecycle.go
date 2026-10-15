@@ -12,13 +12,14 @@ import (
 // delegated work seals the verdict; a foreground stop never cancels its children.
 func (s *Server) beginRetestTurn(ctx context.Context, c *db.Conversation) (func(string, string), bool) {
 	noop := func(string, string) {}
+	turn := handoffTurnFrom(ctx)
 	if c.AgentKey != db.FindingRetestAgentKey {
 		return noop, true
 	}
 	r, err := s.m.pg.FindingRetestForConversation(context.WithoutCancel(ctx), c.ID)
 	if err != nil {
 		log.Printf("[conv %d] load retest: %v", c.ID, err)
-		if receiptFrom(ctx) == nil {
+		if !turn.automatic {
 			if err := s.m.pg.FailPendingRetestForConversation(c.ID, "复测状态读取失败，请重新发起"); err != nil {
 				log.Printf("[conv %d] seal retest: %v", c.ID, err)
 			}
@@ -29,7 +30,7 @@ func (s *Server) beginRetestTurn(ctx context.Context, c *db.Conversation) (func(
 		return noop, true
 	}
 	finish := func(status, reason string) {
-		if receipt := receiptFrom(ctx); receipt != nil && !receipt.started {
+		if turn.automatic && !turn.hasStarted() {
 			return // Retained results retry after cancellation or setup/storage failure.
 		}
 		pending, err := s.conversationHasBackground(ctx, c.ID)

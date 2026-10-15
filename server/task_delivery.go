@@ -13,21 +13,6 @@ import (
 	"github.com/Autumn-27/artex/workflow"
 )
 
-// A receipt belongs to one automatic parent turn, not to the lifetime of a
-// conversation. Pending task results are acknowledged only after that turn ran.
-type backgroundReceipt struct {
-	taskIDs []int64
-	runKeys []string
-	started bool
-}
-
-type backgroundReceiptKey struct{}
-
-func receiptFrom(ctx context.Context) *backgroundReceipt {
-	receipt, _ := ctx.Value(backgroundReceiptKey{}).(*backgroundReceipt)
-	return receipt
-}
-
 func (s *Server) startTaskDeliveryWorker() {
 	if s.m.pg == nil {
 		return
@@ -117,11 +102,13 @@ func workflowResultKey(run workflow.Run) string {
 	return fmt.Sprintf("%s:%d", run.ID, run.FinishedAt.UnixNano())
 }
 
-// A retest may finish only after all delegated work and earlier result batches
-// have been considered. This turn's results are acknowledged after it returns.
+// A retest may finish only after all delegated work and every result has been
+// read by the model. A result whose card is displayed but which the model has
+// not read still counts as unprocessed; only results this turn's model already
+// holds (handed over by OnPrompt, acknowledged when the turn ends) do not.
 func (s *Server) conversationHasBackground(ctx context.Context, id int64) (bool, error) {
 	session := s.convBusyKey(id)
-	receipt := receiptFrom(ctx)
+	readKeys, readTasks := handoffTurnFrom(ctx).receivedResults()
 	if s.workflows != nil {
 		for _, run := range s.workflows.List(session) {
 			if run.Status == workflow.Running || run.Status == workflow.Paused {
@@ -132,7 +119,7 @@ func (s *Server) conversationHasBackground(ctx context.Context, id int64) (bool,
 				s.chatMu.Lock()
 				reported := s.workflowReported[key]
 				s.chatMu.Unlock()
-				if !reported && (receipt == nil || !slices.Contains(receipt.runKeys, key)) {
+				if !reported && !slices.Contains(readKeys, key) {
 					return true, nil
 				}
 			}
@@ -146,9 +133,8 @@ func (s *Server) conversationHasBackground(ctx context.Context, id int64) (bool,
 		}
 	}
 	s.chatMu.Unlock()
-	var receiving []int64
-	if receipt != nil && s.ctx.Err() == nil {
-		receiving = receipt.taskIDs
+	if s.ctx.Err() != nil {
+		readTasks = nil
 	}
-	return s.m.pg.ConversationHasPendingTasks(context.WithoutCancel(ctx), id, receiving)
+	return s.m.pg.ConversationHasPendingTasks(context.WithoutCancel(ctx), id, readTasks)
 }

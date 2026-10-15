@@ -75,6 +75,7 @@ type Server struct {
 	// trigger queue — the drain goroutine simply proceeds to the next queued fire.
 	chatCancel  map[string]context.CancelCauseFunc
 	chatStreams map[int64]*conversationStream // active text/thinking drafts, protected by chatMu
+	chatTurns   map[string]*handoffTurn       // running parent turn per conversation, protected by chatMu
 
 	workflows        *workflow.Manager
 	workflowPending  map[string][]workflowDelivery // per-conversation FIFO, protected by chatMu
@@ -157,7 +158,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
-		workflowPending: map[string][]workflowDelivery{}, workflowMuted: map[string]bool{},
+		workflowPending: map[string][]workflowDelivery{}, workflowMuted: map[string]bool{}, chatTurns: map[string]*handoffTurn{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),

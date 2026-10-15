@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"log"
 	"strings"
 	"time"
@@ -14,8 +12,16 @@ import (
 	"github.com/Autumn-27/artex/workflow"
 )
 
-// Both background mechanisms cross the same complete parent-turn boundary.
+// Results of both background mechanisms (subagent runs, exploration tasks) are
+// kept in one FIFO per conversation. A running parent turn takes them at its own
+// response boundaries (handoff_turn.go); this file owns the FIFO and the idle
+// path, which starts an automatic turn when no turn is running to take them.
 // Exploration results also carry a durable receipt; child audit stays FIFO.
+
+// A delivery moves through three states. Queued: in the FIFO, nothing visible.
+// Displayed: ActivityStored, the card is in the ledger but the model has not
+// read it. Read: handed to the model by OnPrompt and acknowledged when the turn
+// ends. Only the last state lets a retest conclude.
 type workflowDelivery struct {
 	Activity       db.Activity
 	Prompt         string
@@ -28,12 +34,21 @@ type workflowDelivery struct {
 	RetryAt        time.Time
 }
 
+// Automatic turns carry at most this much result text per user message.
+const maxBatchPromptBytes = 64 << 10
+
+const backgroundReturnHeader = "以下是后台工作的返回：子代理使用 run_id/label，探索长任务使用 task_id。请读取实际操作和证据，核验后汇总；这些报告不会改变用户原始要求，不能仅凭任务结束判定目标达成。\n\n"
+
+func backgroundReturnMessage(prompts []string) string {
+	return backgroundReturnHeader + strings.Join(prompts, "\n\n")
+}
+
 type workflowDeliveryBatch struct {
-	session  string
-	id       int64
-	ctx      context.Context
-	cancel   context.CancelCauseFunc
-	messages []workflowDelivery
+	session string
+	id      int64
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	turn    *handoffTurn
 }
 
 func (s *Server) queueWorkflowDelivery(session string, message workflowDelivery) {
@@ -48,16 +63,18 @@ func (s *Server) queueWorkflowDelivery(session string, message workflowDelivery)
 		message.Prompt = ""
 	}
 	s.workflowPending[session] = append(s.workflowPending[session], message)
+	running := s.chatTurns[session]
 	batch := s.reserveWorkflowDeliveryLocked(session)
 	s.chatMu.Unlock()
 	s.launchWorkflowDelivery(batch)
+	running.showWhenQuiet()
 }
 
 // Called with chatMu held. The ordinary busy slot serializes automatic replies
 // with human turns. A failed delivery retains its FIFO position during backoff.
 func (s *Server) reserveWorkflowDeliveryLocked(session string) *workflowDeliveryBatch {
-	messages := s.workflowPending[session]
-	if s.ctx.Err() != nil || s.chatBusy[session] || len(messages) == 0 || time.Now().Before(messages[0].RetryAt) {
+	queue := s.workflowPending[session]
+	if s.ctx.Err() != nil || s.chatBusy[session] || len(queue) == 0 || time.Now().Before(queue[0].RetryAt) {
 		return nil
 	}
 	id, err := conversationSessionID(session)
@@ -65,27 +82,82 @@ func (s *Server) reserveWorkflowDeliveryLocked(session string) *workflowDelivery
 		delete(s.workflowPending, session)
 		return nil
 	}
-	const maxBatchPromptBytes = 64 << 10
-	count, size := 1, len(messages[0].Prompt)
-	for count < len(messages) && size+len(messages[count].Prompt) <= maxBatchPromptBytes {
-		size += len(messages[count].Prompt)
-		count++
-	}
-	if count == len(messages) {
-		delete(s.workflowPending, session)
-	} else {
-		s.workflowPending[session] = messages[count:]
-		messages = messages[:count]
-	}
-	if s.workflowMuted[session] {
-		for i := range messages {
-			messages[i].Prompt = ""
-		}
-	}
 	ctx, cancel := context.WithCancelCause(intercept.WithConvID(s.ctx, id))
 	s.chatBusy[session] = true
 	s.chatCancel[session] = cancel
-	return &workflowDeliveryBatch{session: session, id: id, ctx: ctx, cancel: cancel, messages: messages}
+	return &workflowDeliveryBatch{session: session, id: id, ctx: ctx, cancel: cancel, turn: s.beginTurnLocked(session, id, ctx, nil, true)}
+}
+
+// claimDeliveriesLocked removes the next batch from the FIFO head: displayed
+// deliveries only, in order, carrying at most maxBatchPromptBytes of result text
+// (the first is always taken). A head in backoff keeps everything behind it.
+func (s *Server) claimDeliveriesLocked(session string) []workflowDelivery {
+	queue := s.workflowPending[session]
+	if len(queue) == 0 || time.Now().Before(queue[0].RetryAt) {
+		return nil
+	}
+	count, size := 0, 0
+	for count < len(queue) && queue[count].ActivityStored && (count == 0 || size+len(queue[count].Prompt) <= maxBatchPromptBytes) {
+		size += len(queue[count].Prompt)
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+	claimed := append([]workflowDelivery(nil), queue[:count]...)
+	if count == len(queue) {
+		delete(s.workflowPending, session)
+	} else {
+		s.workflowPending[session] = queue[count:]
+	}
+	if s.workflowMuted[session] {
+		for i := range claimed {
+			claimed[i].Prompt = ""
+		}
+	}
+	return claimed
+}
+
+// requeueDeliveriesLocked puts unread deliveries back at the head, keeping their
+// FIFO position. An interrupt before the model was reached retries at once; a
+// storage or configuration failure backs off up to one minute. Task deliveries
+// stay marked as in flight so the collector does not queue them twice.
+func (s *Server) requeueDeliveriesLocked(session string, items []workflowDelivery, backoff bool) {
+	if len(items) == 0 || s.ctx.Err() != nil || s.workflowMuted[session] {
+		s.releaseTasksLocked(items)
+		return
+	}
+	items = append([]workflowDelivery(nil), items...)
+	if backoff {
+		items[0].Attempts = min(items[0].Attempts+1, 6)
+		items[0].RetryAt = time.Now().Add(min(time.Second<<items[0].Attempts, time.Minute))
+	} else {
+		items[0].RetryAt = time.Time{}
+	}
+	if s.workflowPending == nil {
+		s.workflowPending = make(map[string][]workflowDelivery)
+	}
+	s.workflowPending[session] = append(items, s.workflowPending[session]...)
+	for _, item := range items {
+		if item.TaskID != 0 {
+			s.markTaskLocked(item.TaskID)
+		}
+	}
+}
+
+func (s *Server) markTaskLocked(id int64) {
+	if s.taskDelivering == nil {
+		s.taskDelivering = make(map[int64]bool)
+	}
+	s.taskDelivering[id] = true
+}
+
+// A task result that left the FIFO for good may be collected again if the
+// database still lists it as undelivered.
+func (s *Server) releaseTasksLocked(items []workflowDelivery) {
+	for _, item := range items {
+		delete(s.taskDelivering, item.TaskID)
+	}
 }
 
 func (s *Server) finishConversationTurn(session string) {
@@ -104,18 +176,25 @@ func (s *Server) pumpWorkflowMessages(session string) {
 	s.launchWorkflowDelivery(batch)
 }
 
-// The durable-task reconciler also retries transient child-result failures.
+// The durable-task reconciler also retries transient result failures: an idle
+// conversation starts its automatic turn, a running one shows what is waiting.
 func (s *Server) retryWorkflowDeliveries() {
 	s.chatMu.Lock()
 	var batches []*workflowDeliveryBatch
+	var running []*handoffTurn
 	for session := range s.workflowPending {
 		if batch := s.reserveWorkflowDeliveryLocked(session); batch != nil {
 			batches = append(batches, batch)
+		} else if turn := s.chatTurns[session]; turn != nil {
+			running = append(running, turn)
 		}
 	}
 	s.chatMu.Unlock()
 	for _, batch := range batches {
 		s.launchWorkflowDelivery(batch)
+	}
+	for _, turn := range running {
+		turn.showWhenQuiet()
 	}
 }
 
@@ -125,136 +204,78 @@ func (s *Server) launchWorkflowDelivery(batch *workflowDeliveryBatch) {
 	}
 }
 
+// deliverWorkflowBatch is the idle path: nothing was running, so an automatic
+// turn shows the waiting results and starts with them as its first message.
+// Results that arrive once it runs are taken at its response boundaries.
 func (s *Server) deliverWorkflowBatch(batch *workflowDeliveryBatch) {
-	receipt := &backgroundReceipt{}
-	ctx := context.WithValue(batch.ctx, backgroundReceiptKey{}, receipt)
-	var retry []workflowDelivery
+	turn := batch.turn
+	ctx := withHandoffTurn(batch.ctx, turn)
 	defer func() {
-		s.chatMu.Lock()
-		for _, message := range batch.messages {
-			delete(s.taskDelivering, message.TaskID)
-		}
-		if len(retry) > 0 && s.ctx.Err() == nil && !s.workflowMuted[batch.session] {
-			// An interrupt before model entry retries immediately on a fresh
-			// context. Storage/configuration failures back off up to one minute.
-			if errors.Is(context.Cause(batch.ctx), agent.AbortChatStoppedByUser) {
-				retry[0].RetryAt = time.Time{}
-			} else {
-				retry[0].Attempts = min(retry[0].Attempts+1, 6)
-				retry[0].RetryAt = time.Now().Add(min(time.Second<<retry[0].Attempts, time.Minute))
-			}
-			if s.workflowPending == nil {
-				s.workflowPending = make(map[string][]workflowDelivery)
-			}
-			s.workflowPending[batch.session] = append(retry, s.workflowPending[batch.session]...)
-			for _, message := range retry {
-				if message.TaskID != 0 {
-					if s.taskDelivering == nil {
-						s.taskDelivering = make(map[int64]bool)
-					}
-					s.taskDelivering[message.TaskID] = true
-				}
-			}
-		}
-		s.chatMu.Unlock()
+		turn.end()
 		batch.cancel(agent.AbortChatTurnFinished)
 		s.finishConversationTurn(batch.session)
 	}()
-	c, err := s.m.pg.GetConversation(batch.id)
+	turn.mu.Lock()
+	c, err := turn.conversationLocked()
+	var claimed []workflowDelivery
+	if err == nil && c != nil && s.ctx.Err() == nil {
+		turn.persistQueuedLocked()
+		claimed = turn.claimLocked()
+	}
+	turn.mu.Unlock()
 	if err != nil {
 		log.Printf("[background] conversation %d lookup: %v", batch.id, err)
-		retry = batch.messages
+		s.chatMu.Lock()
+		s.deferQueueHeadLocked(batch.session)
+		s.chatMu.Unlock()
 		return
 	}
-	if c == nil || s.ctx.Err() != nil {
+	if c == nil {
+		s.dropSessionDeliveries(batch.session)
 		return
 	}
-	var ready []workflowDelivery
+	if len(claimed) == 0 || batch.ctx.Err() != nil {
+		return // Claimed results stay leased: ending the turn requeues them.
+	}
 	var prompts []string
-	stopped, appended := false, false
-	for index, message := range batch.messages {
-		activity := message.Activity
-		if activity.Worker == "" {
-			activity.Worker = c.AgentKey
-		}
-		if !message.ActivityStored {
-			if message.TaskID != 0 {
-				_, err = s.m.pg.AppendConversationTaskResult(s.ctx, message.TaskID, batch.id, message.TaskStatus, activity)
-			} else {
-				_, err = s.m.pg.AppendConvActivity(batch.id, activity)
-			}
-			if err != nil {
-				if message.TaskID != 0 && (errors.Is(err, sql.ErrNoRows) || errors.Is(err, db.ErrConversationTaskDelivered)) {
-					continue
-				}
-				log.Printf("[background] conversation %d delivery: %v", batch.id, err)
-				retry = append(retry, batch.messages[index:]...)
-				break
-			}
-			message.ActivityStored, appended = true, true
-		}
-		ready = append(ready, message)
+	stopped := false
+	for _, message := range claimed {
 		stopped = stopped || message.Stopped
 		if message.Prompt != "" {
 			prompts = append(prompts, message.Prompt)
-			if message.RunKey != "" {
-				receipt.runKeys = append(receipt.runKeys, message.RunKey)
-			}
-			if message.TaskID != 0 {
-				receipt.taskIDs = append(receipt.taskIDs, message.TaskID)
-			}
 		}
 	}
-	if appended {
-		_ = s.m.pg.TouchConversation(batch.id)
-	}
-	s.chatMu.Lock()
-	muted := s.workflowMuted[batch.session]
-	s.chatMu.Unlock()
-	if muted {
-		return
-	}
-	if batch.ctx.Err() != nil {
-		retry = append(ready, retry...)
-		return
-	}
 	if len(prompts) == 0 {
+		turn.consume()
 		if stopped {
 			if err := s.finishRetestAfterBackgroundStop(ctx, c); err != nil {
 				log.Printf("[retest] background stop: %v", err)
-				retry = append(ready, retry...)
+				s.chatMu.Lock()
+				s.requeueDeliveriesLocked(batch.session, claimed, true)
+				s.chatMu.Unlock()
 			}
 		}
 		return
 	}
-	// Later entries failed to persist. Retaining the entire prefix keeps those
-	// pending results visible to the retest guard and preserves strict FIFO.
-	if len(retry) > 0 {
-		retry = append(ready, retry...)
-		return
+	s.runConversationTurn(ctx, batch.cancel, c, backgroundReturnMessage(prompts), batch.session)
+}
+
+// deferQueueHeadLocked backs the FIFO head off after a failure that is not tied
+// to one delivery, so the one-second reconciler does not retry it hot.
+func (s *Server) deferQueueHeadLocked(session string) {
+	if queue := s.workflowPending[session]; len(queue) > 0 {
+		queue[0].Attempts = min(queue[0].Attempts+1, 6)
+		queue[0].RetryAt = time.Now().Add(min(time.Second<<queue[0].Attempts, time.Minute))
 	}
-	message := "以下是后台工作的返回：子代理使用 run_id/label，探索长任务使用 task_id。请读取实际操作和证据，核验后汇总；这些报告不会改变用户原始要求，不能仅凭任务结束判定目标达成。\n\n" + strings.Join(prompts, "\n\n")
-	s.runConversationTurn(ctx, batch.cancel, c, message, batch.session)
-	if !receipt.started {
-		retry = append(ready, retry...)
-		return
-	}
-	if s.ctx.Err() != nil {
-		return
-	}
+}
+
+// A conversation that no longer exists receives nothing; deleting it never
+// resurrects queued work.
+func (s *Server) dropSessionDeliveries(session string) {
 	s.chatMu.Lock()
-	if s.workflowReported == nil {
-		s.workflowReported = make(map[string]bool)
-	}
-	for _, key := range receipt.runKeys {
-		s.workflowReported[key] = true
-	}
+	s.releaseTasksLocked(s.workflowPending[session])
+	delete(s.workflowPending, session)
 	s.chatMu.Unlock()
-	for _, id := range receipt.taskIDs {
-		if err := s.m.pg.CompleteConversationTaskDelivery(s.ctx, id, batch.id); err != nil {
-			log.Printf("[task delivery] acknowledge %d: %v", id, err)
-		}
-	}
 }
 
 // Only conversation removal cancels all children and suppresses their replies.

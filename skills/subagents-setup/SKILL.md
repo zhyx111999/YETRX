@@ -23,7 +23,7 @@ SDK 基础工具（Bash、Read、Write、Edit、MultiEdit、LS、Glob、Grep）�
 {"tasks":[{"label":"review","agent_key":"agent","task":"独立检查指定文件，报告实际操作、证据和结果。"}]}
 ```
 
-启动后保留返回的 `run_id`。主对话正在输出时，子代理记录和结果先排队，本轮输出及工具执行结束后立即依序插入，不打断回复，也不需要用户再发消息。控制工具支持 `list`、`status`、`read`、`stop`、`resume`、`message`；明确提供 run_id 和目标 label，不使用探索子任务的 task_id/intent_id。例如：
+启动后保留返回的 `run_id`。主对话正在生成文字时，子代理记录和结果先排队，不插入回复；当前这次响应结束后立即显示，同一轮后续的模型请求在工具结果之后读取结果，不取消或重跑正在执行的工具；最后一次响应之后则本轮结束时自动跟进，也不需要用户再发消息。控制工具支持 `list`、`status`、`read`、`stop`、`resume`、`message`；明确提供 run_id 和目标 label，不使用探索子任务的 task_id/intent_id。例如：
 
 ```json
 {"action":"read","run_id":"返回的ID","label":"review","max_chars":8000}

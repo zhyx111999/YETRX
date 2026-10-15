@@ -43,16 +43,31 @@ func (p *conversationStream) delta(kind, text string) {
 func (p *conversationStream) append(pg *db.DB, id int64, activity db.Activity) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	seq, err := pg.AppendConvActivity(id, activity)
-	if err == nil {
-		p.cursor = seq
-	}
+	err := p.record(func() (int64, error) { return pg.AppendConvActivity(id, activity) })
 	// Capture flushes before every step except usage, including tool boundaries
 	// after whitespace-only output. A failed write must not join the next step's
 	// text onto the previous draft either.
 	if activity.Kind != "usage" {
 		p.text.Reset()
 		p.draft = ActivityDTO{}
+	}
+	return err
+}
+
+// commit persists a row the model did not write (a background result card)
+// through the same lock and cursor, without touching the draft. Hosts call it
+// only at response boundaries, when no text is being generated.
+func (p *conversationStream) commit(write func() (int64, error)) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.record(write)
+}
+
+// record runs one durable write and publishes it to followers; mu is held.
+func (p *conversationStream) record(write func() (int64, error)) error {
+	seq, err := write()
+	if err == nil && seq > p.cursor {
+		p.cursor = seq
 	}
 	p.revision++
 	return err

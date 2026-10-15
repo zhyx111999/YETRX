@@ -150,7 +150,7 @@ func (s *Server) startWorkflow(ctx context.Context, input json.RawMessage) (acto
 	if err != nil {
 		return actool.Errorf(err.Error()), nil
 	}
-	return jsonResult(map[string]any{"run_id": id, "status": "running", "message": "子代理已在后台启动；结果在主对话忙碌时排队，本轮输出结束后立即送入供主代理审查。"})
+	return jsonResult(map[string]any{"run_id": id, "status": "running", "message": "子代理已在后台启动；结果在主对话生成文字时排队，当前响应结束后立即显示并供下一次模型请求读取；没有后续请求则本轮结束后自动跟进。"})
 }
 
 func (s *Server) controlWorkflow(ctx context.Context, input json.RawMessage) (actool.Result, error) {

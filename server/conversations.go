@@ -510,10 +510,22 @@ func (s *Server) conversationRunContext(id int64, busyKey string) (context.Conte
 	return ctx, cancel
 }
 
+// runConversationTurn runs one parent turn. The idle path passes the turn it
+// already reserved (automatic) and releases the busy slot itself; every other
+// caller gets a fresh turn here and the slot is released on return.
 func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelCauseFunc, c *db.Conversation, msg, busyKey string) {
+	turn := handoffTurnFrom(ctx)
+	owned := turn == nil
+	if owned {
+		turn = s.beginTurn(busyKey, c.ID, ctx, c, false)
+		ctx = withHandoffTurn(ctx, turn)
+	}
 	defer func() {
+		if owned {
+			turn.end() // requeue unread results before the slot is released
+		}
 		cancel(agent.AbortChatTurnFinished)
-		if receiptFrom(ctx) == nil {
+		if owned {
 			s.finishConversationTurn(busyKey)
 		}
 	}()
@@ -528,7 +540,7 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	}
 	// precedence: the conversation agent's own binding → this conversation's pin → global.
 	if err := s.ensureNativeHistory(c.ID); err != nil {
-		if receiptFrom(ctx) == nil {
+		if !turn.automatic {
 			_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true, Summary: "历史迁移失败", Detail: err.Error()})
 		} else {
 			log.Printf("[conv %d] background history unavailable: %v", c.ID, err)
@@ -547,6 +559,7 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
 	stream, closeStream := s.beginConversationStream(c.ID, c.AgentKey)
 	defer closeStream()
+	turn.bindStream(stream)
 	ctx = agent.WithActivityStream(ctx, stream.delta)
 	emit := func(rec db.Activity) {
 		if err := stream.append(pg, c.ID, rec); err != nil {
@@ -555,13 +568,10 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	}
 	// On a manual stop ctx is cancelled; Chat already emits a clean "已手动停止"
 	// step, so skip the raw-error entry — only surface genuine failures.
-	receipt := receiptFrom(ctx)
-	if receipt != nil {
-		ctx = agent.WithChatControl(ctx, agent.ChatControl{OnPrompt: func() { receipt.started = true }})
-	}
+	ctx = agent.WithChatControl(ctx, turn.control())
 	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
 		finishReason = err.Error()
-		if receipt != nil && !receipt.started {
+		if turn.automatic && !turn.hasStarted() {
 			log.Printf("[conv %d] background setup: %v", c.ID, err)
 		} else if ctx.Err() == nil {
 			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,
@@ -570,7 +580,7 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	} else {
 		finishStatus, finishReason = "completed", ""
 	}
-	if receipt == nil || receipt.started {
+	if !turn.automatic || turn.hasStarted() {
 		_ = pg.TouchConversation(c.ID)
 	}
 }

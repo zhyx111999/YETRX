@@ -68,6 +68,11 @@ func captureRunSession(ctx context.Context, s promptSession, input string, emit 
 			rec(db.Activity{Kind: k, Summary: firstLine(s, 200), Detail: s})
 		}
 	}
+	// A tool-requesting response is complete once its trailing buffered text is
+	// committed; the session reports that boundary to the host only after this.
+	if f, ok := s.(interface{ setResponseFlush(func()) }); ok {
+		f.setResponseFlush(flush)
+	}
 	stream := activityStreamFrom(ctx)
 	addDelta := func(kind, text string) {
 		if text == "" {

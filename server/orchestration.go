@@ -347,7 +347,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			s.launchTask(t, a.Description+" "+a.Goal, a.SeedFirstIntent)
 			return jsonResult(map[string]any{
 				"task_id": t.ID, "background": true, "returns_to_conversation": sourceConversationID > 0,
-				"message": "探索长任务独立在后台运行。主聊天停止只中断当前回复；任务完成后向来源会话回传，主对话忙时排队。需单独暂停任务时使用 pause_task 或任务页面。",
+				"message": "探索长任务独立在后台运行。主聊天停止只中断当前回复；任务完成后向来源会话回传：主对话生成文字时排队，当前响应结束后显示并供下一次模型请求读取，没有后续请求则本轮结束后自动跟进。需单独暂停任务时使用 pause_task 或任务页面。",
 			})
 		})
 }

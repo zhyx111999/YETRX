@@ -25,21 +25,47 @@ func retryDeliveryNow(s *Server, session string) {
 }
 
 func TestBackgroundDeliveryBoundsBatchWithoutReordering(t *testing.T) {
-	s := &Server{ctx: context.Background(), chatBusy: map[string]bool{}, chatCancel: map[string]context.CancelCauseFunc{}, workflowPending: map[string][]workflowDelivery{}}
+	s := &Server{ctx: context.Background(), workflowPending: map[string][]workflowDelivery{}}
 	session := s.convBusyKey(1)
 	for _, key := range []string{"first", "second", "third"} {
-		s.workflowPending[session] = append(s.workflowPending[session], workflowDelivery{RunKey: key, Prompt: strings.Repeat("x", 40<<10)})
+		s.workflowPending[session] = append(s.workflowPending[session], workflowDelivery{RunKey: key, Prompt: strings.Repeat("x", 40<<10), ActivityStored: true})
 	}
 	for _, key := range []string{"first", "second", "third"} {
-		batch := s.reserveWorkflowDeliveryLocked(session)
-		if batch == nil || len(batch.messages) != 1 || batch.messages[0].RunKey != key {
+		batch := s.claimDeliveriesLocked(session)
+		if len(batch) != 1 || batch[0].RunKey != key {
 			t.Fatalf("bad bounded batch for %s: %+v", key, batch)
 		}
-		batch.cancel(context.Canceled)
-		delete(s.chatBusy, session)
 	}
 	if len(s.workflowPending[session]) != 0 {
 		t.Fatal("pending results left after all batches")
+	}
+}
+
+func TestBackgroundDeliveryClaimsOnlyDisplayedResultsInOrder(t *testing.T) {
+	s := &Server{ctx: context.Background(), workflowPending: map[string][]workflowDelivery{}}
+	session := s.convBusyKey(1)
+	big := strings.Repeat("x", maxBatchPromptBytes+1)
+	s.workflowPending[session] = []workflowDelivery{
+		{RunKey: "oversized", Prompt: big, ActivityStored: true},
+		{RunKey: "audit", ActivityStored: true},
+		{RunKey: "shown", Prompt: "shown", ActivityStored: true},
+		{RunKey: "hidden", Prompt: "hidden"},
+		{RunKey: "after", Prompt: "after", ActivityStored: true},
+	}
+	if batch := s.claimDeliveriesLocked(session); len(batch) != 1 || batch[0].RunKey != "oversized" {
+		t.Fatalf("an oversized first result must travel alone: %+v", batch)
+	}
+	batch := s.claimDeliveriesLocked(session)
+	if len(batch) != 2 || batch[0].RunKey != "audit" || batch[1].RunKey != "shown" {
+		t.Fatalf("claim must stop at the first result without a card: %+v", batch)
+	}
+	if batch := s.claimDeliveriesLocked(session); batch != nil || len(s.workflowPending[session]) != 2 {
+		t.Fatalf("an undisplayed result must keep the queue behind it: %+v", batch)
+	}
+	s.workflowPending[session][0].ActivityStored = true
+	s.workflowPending[session][0].RetryAt = time.Now().Add(time.Minute)
+	if batch := s.claimDeliveriesLocked(session); batch != nil {
+		t.Fatalf("a head in backoff must hold the queue: %+v", batch)
 	}
 }
 
