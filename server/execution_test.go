@@ -52,7 +52,7 @@ func processFactoryForTest(t *testing.T) agent.SessionFactory {
 }
 
 func TestExecutionProcessKeepsSharedRolesAndResponseDelivery(t *testing.T) {
-	agent.SetSessionFactory(limitSessionFactory(processFactoryForTest(t), 8))
+	agent.SetSessionFactory(singleWriterSessionFactory(processFactoryForTest(t)))
 	limits := execution.Limits{MemoryBytes: 768 << 20, CPUs: 1, Processes: 128}
 	if err := ConfigureResourceExecution(&resourceexec.Config{Env: append(executionEnvironment(os.Environ()), "YETRX_EXECUTION_FIXTURE=1"), Limits: limits, MCPLimits: limits, MaxWorkers: 8}); err != nil {
 		t.Fatal(err)
@@ -109,9 +109,9 @@ func (*executionFakeSession) Prompt(context.Context, string) iter.Seq2[harness.E
 func (*executionFakeSession) Resume(string) error { return nil }
 func (s *executionFakeSession) Close() error      { s.closes.Add(1); return s.closeErr }
 
-func TestExecutionAdmissionKeepsWriterAndUnreapedCapacity(t *testing.T) {
+func TestExecutionAdmissionKeepsWriterWithoutSharedCountCap(t *testing.T) {
 	var next *executionFakeSession
-	factory := limitSessionFactory(func(context.Context, agentcore.Options) (agent.RuntimeSession, error) { return next, nil }, 2)
+	factory := singleWriterSessionFactory(func(context.Context, agentcore.Options) (agent.RuntimeSession, error) { return next, nil })
 	store := transcript.NewStore(t.TempDir())
 	opts := agentcore.Options{Transcript: store, SessionID: "same"}
 	next = &executionFakeSession{}
@@ -119,7 +119,7 @@ func TestExecutionAdmissionKeepsWriterAndUnreapedCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := factory(t.Context(), opts); !errors.Is(err, ErrExecutionBusy) {
+	if _, err := factory(t.Context(), opts); !errors.Is(err, ErrTranscriptBusy) {
 		t.Fatalf("concurrent transcript writer admitted: %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -136,17 +136,16 @@ func TestExecutionAdmissionKeepsWriterAndUnreapedCapacity(t *testing.T) {
 	if s.Close() == nil {
 		t.Fatal("cleanup failure hidden")
 	}
-	if _, err := factory(t.Context(), opts); !errors.Is(err, ErrExecutionBusy) {
+	if _, err := factory(t.Context(), opts); !errors.Is(err, ErrTranscriptBusy) {
 		t.Fatal("unreaped writer released")
 	}
-	next = &executionFakeSession{}
-	other, err := factory(t.Context(), agentcore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	if _, err := factory(t.Context(), agentcore.Options{}); !errors.Is(err, ErrExecutionBusy) {
-		t.Fatal("pool limit bypassed")
+	for i := range 40 {
+		next = &executionFakeSession{}
+		other, err := factory(t.Context(), agentcore.Options{Transcript: store, SessionID: fmt.Sprintf("other-%d", i)})
+		if err != nil {
+			t.Fatalf("independent writer %d blocked by a shared count cap: %v", i, err)
+		}
+		defer other.Close()
 	}
 }
 

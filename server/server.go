@@ -52,6 +52,8 @@ type Server struct {
 	// free slots off the same snapshot and over-promote past the limit.
 	concMu sync.Mutex
 
+	executionSettingsMu sync.Mutex // Serializes saved execution settings and live admission updates.
+
 	cfgMu     sync.Mutex
 	chatAgent *agent.ChatAgent // conversational runner for the chat page; nil w/o LLM
 	// llmProv is the fully-decorated global provider (recorder + failover chain)
@@ -3306,6 +3308,10 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsPayload() (map[string]any, error) {
+	executionSettings, err := s.executionSettingsPayload()
+	if err != nil {
+		return nil, err
+	}
 	fileMaxMiB, err := s.chatFileMaxMiB()
 	if err != nil {
 		return nil, err
@@ -3316,7 +3322,7 @@ func (s *Server) settingsPayload() (map[string]any, error) {
 	if concLimit == 0 {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"traffic_capture":          s.m.TrafficEnabled(),
 		"agent_traffic_binding":    s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		"llm_record":               s.m.LLMRecordEnabled(),
@@ -3346,7 +3352,11 @@ func (s *Server) settingsPayload() (map[string]any, error) {
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
 		"notify_public_base_url":     notifyPublicBaseURL(s.m.pg),
 		"notify_digest_interval_min": notifyDigestIntervalMin(s.m.pg),
-	}, nil
+	}
+	for key, value := range executionSettings {
+		payload[key] = value
+	}
+	return payload, nil
 }
 
 // notifyPublicBaseURL 读推送回链用的外部地址。
@@ -3388,6 +3398,7 @@ func (s *Server) pgDetectPython(w http.ResponseWriter, r *http.Request) {
 // off, agents get no proxy config, no traffic tools, and no proxy prompt content.
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		executionSettingsPatch
 		TrafficCapture      *bool `json:"traffic_capture"`
 		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
 		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
@@ -3422,6 +3433,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := req.executionSettingsPatch.validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.ChatFileMaxMiB != nil {
@@ -3592,6 +3607,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "保存文件大小配置失败")
 			return
 		}
+	}
+	if err := s.setExecutionSettings(r.Context(), req.executionSettingsPatch); err != nil {
+		writeErr(w, http.StatusInternalServerError, "保存执行配置失败："+err.Error())
+		return
 	}
 	s.getSettings(w, r)
 }

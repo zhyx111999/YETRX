@@ -342,6 +342,12 @@ func (m *Manager) Enrich() *enrich.Engine { return m.enrich }
 // NewManager connects to PostgreSQL and, if proxyAddr is non-empty, starts the
 // traffic-recording proxy. PostgreSQL is required (it is the single data source).
 func NewManager(dir, proxyAddr string) (*Manager, error) {
+	return newManager(dir, proxyAddr, nil)
+}
+
+// setup runs after opening the settings store and before recovery or any
+// background service. Production uses it to install persisted execution budgets.
+func newManager(dir, proxyAddr string, setup func(*pgdb.DB) error) (*Manager, error) {
 	// Resolve the data dir to an ABSOLUTE path up front. Every data path derives
 	// from it — notably the MITM CA cert, whose path is injected into worker shells
 	// (SSL_CERT_FILE/CURL_CA_BUNDLE) and read by WebFetch. A relative path (the
@@ -362,6 +368,12 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	pg, err := pgdb.Open(dsn)
 	if err != nil {
 		return nil, err
+	}
+	if setup != nil {
+		if err := setup(pg); err != nil {
+			_ = pg.Close()
+			return nil, err
+		}
 	}
 	if err := pg.RecoverFindingRetests(); err != nil {
 		pg.Close()

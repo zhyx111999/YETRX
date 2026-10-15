@@ -13,14 +13,17 @@ func TestExecutionSettingsRequireExplicitValidLimits(t *testing.T) {
 	}
 	defaults, err := Execution()
 	if err != nil || defaults != (ExecutionSettings{
-		Enabled: true, MaxSessions: 32, MemoryMiB: 512, CPUs: 1, Processes: 128,
-		MaxResources: 64, ResourceMemoryMiB: 384, ResourceCPUs: 1, ResourceProcesses: 128,
-		TotalMemoryMiB: 3072, TotalCPUs: 4, TotalProcesses: 1024,
+		Enabled: true, MaxResources: 64,
+		Budget: ExecutionBudget{
+			Agent:  ProcessBudget{MemoryMiB: 512, CPUs: 1, Processes: 128},
+			Helper: ProcessBudget{MemoryMiB: 384, CPUs: 1, Processes: 128},
+			Total:  ProcessBudget{MemoryMiB: 3072, CPUs: 4, Processes: 1024},
+		},
 	}) {
 		t.Fatalf("default limits: %+v %v", defaults, err)
 	}
 	for _, item := range []struct{ key, value string }{
-		{"ARTEX_EXECUTION_ENABLED", "maybe"}, {"ARTEX_EXECUTION_MAX_SESSIONS", "0"},
+		{"ARTEX_EXECUTION_ENABLED", "maybe"},
 		{"ARTEX_EXECUTION_MEMORY_MIB", "-1"}, {"ARTEX_EXECUTION_CPUS", "NaN"}, {"ARTEX_RESOURCE_CPUS", "+Inf"},
 		{"ARTEX_EXECUTION_PROCESSES", "0"}, {"ARTEX_RESOURCE_MAX_WORKERS", "10000000"},
 	} {
@@ -31,10 +34,11 @@ func TestExecutionSettingsRequireExplicitValidLimits(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv("ARTEX_EXECUTION_MAX_SESSIONS", "7")
+	// The retired global Agent count cap must not be restored by legacy env.
+	t.Setenv("ARTEX_EXECUTION_MAX_SESSIONS", "not-a-limit")
 	t.Setenv("ARTEX_RESOURCE_MAX_WORKERS", "12")
 	overridden, err := Execution()
-	if err != nil || overridden.MaxSessions != 7 || overridden.MaxResources != 12 || overridden.TotalMemoryMiB != defaults.TotalMemoryMiB || overridden.TotalCPUs != defaults.TotalCPUs || overridden.TotalProcesses != defaults.TotalProcesses {
+	if err != nil || overridden.MaxResources != 12 || overridden.Budget != defaults.Budget {
 		t.Fatalf("explicit capacity overrides: %+v %v", overridden, err)
 	}
 	t.Setenv("ARTEX_EXECUTION_ENABLED", "false")

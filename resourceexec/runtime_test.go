@@ -576,7 +576,7 @@ func TestResourceDefaultBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.config.Limits != (execution.Limits{MemoryBytes: 512 << 20, CPUs: 1, Processes: 128}) || r.config.MCPLimits != (execution.Limits{MemoryBytes: 384 << 20, CPUs: 1, Processes: 128}) || cap(r.slots) != 4 {
+	if r.config.Limits != (execution.Limits{MemoryBytes: 512 << 20, CPUs: 1, Processes: 128}) || r.config.MCPLimits != (execution.Limits{MemoryBytes: 384 << 20, CPUs: 1, Processes: 128}) || r.MaxWorkers() != 4 {
 		t.Fatalf("wrong defaults: %+v", r.config)
 	}
 }

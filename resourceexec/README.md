@@ -8,9 +8,12 @@ host DB/Engine tools. Integrate the execution supervisor before building.
 
 - `server.ConfigureResourceExecution(*resourceexec.Config) error`: call before
   normal server startup/discovery. `nil` explicitly selects in-process execution.
-  A configured worker failure never falls back. Config snapshots use atomic
-  replacement; argument/environment slices are copied. Existing connections keep
-  their own snapshot until closed.
+  A configured worker failure never falls back. Startup snapshots use atomic
+  replacement; argument/environment slices are copied. Live settings use
+  `Runtime.SetMaxWorkers` instead, preserving all existing reservations and
+  connections. Lowering capacity does not terminate live helpers; new admissions
+  remain blocked until occupancy falls below the new limit. `MaxWorkers()` reads
+  the current limit.
 - `server.ServeResourceWorker(context.Context) error`: cmd must dispatch
   `resourceexec.WorkerCommand` (`resource-worker`) before config/PG/server startup.
   Stdout is reserved for framed RPC. The worker never opens the application's DB
@@ -53,7 +56,9 @@ with the bridge's existing metadata decorator.
 - `Limits execution.Limits`: custom/admin worker defaults 512 MiB, 1 CPU, 128
   processes. Every zero dimension takes its default; negatives/nonfinite CPU fail.
 - `MCPLimits execution.Limits`: MCP worker defaults 384 MiB, 1 CPU, 128 processes.
-- `MaxWorkers int`: defaults to 4. Shared independent nonblocking capacity for MCP
+- `MaxWorkers int`: the package default is 4; the application supplies 64 unless
+  System Settings or the environment fallback specifies otherwise. Shared
+  independent nonblocking capacity for MCP
   connections and one-shot custom helpers; each occupied slot remains charged
   until the entire process tree is reaped. Agent-local custom tools use the Agent
   process budget and do not consume this pool.

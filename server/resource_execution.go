@@ -12,9 +12,10 @@ import (
 
 var resourceRuntime atomic.Pointer[resourceexec.Runtime]
 
-// ConfigureResourceExecution installs a complete immutable snapshot before server
-// startup. nil explicitly disables isolation. Failed configuration leaves the old
-// snapshot intact; a failed worker launch never falls back to in-process work.
+// ConfigureResourceExecution installs the startup runtime. Live capacity changes
+// use SetMaxWorkers without replacing reservations. nil explicitly disables
+// isolation; failed configuration leaves the old runtime intact and never falls
+// back to in-process execution.
 func ConfigureResourceExecution(c *resourceexec.Config) error {
 	if c == nil {
 		resourceRuntime.Store(nil)

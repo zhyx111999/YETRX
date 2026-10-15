@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
@@ -21,7 +22,9 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-var ErrExecutionBusy = errors.New("agent execution capacity is busy; retry after a running session finishes")
+var ErrTranscriptBusy = errors.New("agent transcript already has an active writer; retry after it finishes")
+
+var executionState atomic.Pointer[config.ExecutionSettings]
 
 const executionProbeCommand = "execution-probe"
 const shellLocalKind = "artex.shell.v1"
@@ -68,24 +71,28 @@ func RunExecutionWorker(ctx context.Context, args []string) (bool, error) {
 	return false, nil
 }
 
-// ConfigureExecution installs both execution paths before any Server or Manager
-// is created. A failed OS setup or worker handshake prevents startup.
+// ConfigureExecution installs both execution paths after saved settings are read,
+// before any agents or background work start. Failed OS setup prevents startup.
 func ConfigureExecution(ctx context.Context, c config.ExecutionSettings) error {
 	if !c.Enabled {
 		if err := ConfigureResourceExecution(nil); err != nil {
 			return err
 		}
 		agent.SetSessionFactory(nil)
+		executionState.Store(&c)
 		log.Print("[execution] process isolation explicitly disabled")
 		return nil
 	}
-	if c.MaxSessions <= 0 || c.MaxResources <= 0 || c.MemoryMiB <= 0 || c.ResourceMemoryMiB <= 0 || c.CPUs <= 0 || c.ResourceCPUs <= 0 || c.Processes <= 0 || c.ResourceProcesses <= 0 || c.TotalMemoryMiB <= 0 || c.TotalCPUs <= 0 || c.TotalProcesses <= 0 {
-		return errors.New("execution requires positive capacity and CPU, memory and process limits")
+	if c.MaxResources < 1 || c.MaxResources > config.MaxExecutionConcurrency {
+		return errors.New("execution requires valid helper capacity")
+	}
+	if err := c.Budget.Validate(); err != nil {
+		return err
 	}
 	if err := execution.InitCgroup(); err != nil {
 		return err
 	}
-	if err := execution.ConfigureBudget(execution.Limits{MemoryBytes: int64(c.TotalMemoryMiB) << 20, CPUs: c.TotalCPUs, Processes: c.TotalProcesses}); err != nil {
+	if err := execution.ConfigureBudget(processLimits(c.Budget.Total)); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
@@ -93,8 +100,8 @@ func ConfigureExecution(ctx context.Context, c config.ExecutionSettings) error {
 		return err
 	}
 	env := executionEnvironment(os.Environ())
-	limits := execution.Limits{MemoryBytes: int64(c.MemoryMiB) << 20, CPUs: c.CPUs, Processes: c.Processes}
-	resourceLimits := execution.Limits{MemoryBytes: int64(c.ResourceMemoryMiB) << 20, CPUs: c.ResourceCPUs, Processes: c.ResourceProcesses}
+	limits := processLimits(c.Budget.Agent)
+	resourceLimits := processLimits(c.Budget.Helper)
 	for _, limit := range []execution.Limits{limits, resourceLimits} {
 		if err := probeExecution(ctx, exe, env, limit); err != nil {
 			return fmt.Errorf("execution startup probe: %w", err)
@@ -107,10 +114,15 @@ func ConfigureExecution(ctx context.Context, c config.ExecutionSettings) error {
 		Executable: exe, Env: env, Limits: limits,
 		LocalTool: executionToolPlacement, OnLocalToolStart: recordLocalToolStart,
 	})
-	agent.SetSessionFactory(limitSessionFactory(factory, c.MaxSessions))
-	log.Printf("[execution] aggregate memory=%dMiB cpu=%g pids=%d (website excluded)", c.TotalMemoryMiB, c.TotalCPUs, c.TotalProcesses)
-	log.Printf("[execution] sessions=%d memory=%dMiB cpu=%g pids=%d; resources=%d memory=%dMiB cpu=%g pids=%d", c.MaxSessions, c.MemoryMiB, c.CPUs, c.Processes, c.MaxResources, c.ResourceMemoryMiB, c.ResourceCPUs, c.ResourceProcesses)
+	agent.SetSessionFactory(singleWriterSessionFactory(factory))
+	executionState.Store(&c)
+	log.Printf("[execution] aggregate memory=%dMiB cpu=%g pids=%d (website excluded)", c.Budget.Total.MemoryMiB, c.Budget.Total.CPUs, c.Budget.Total.Processes)
+	log.Printf("[execution] no shared Agent count cap; agent memory=%dMiB cpu=%g pids=%d; resources=%d memory=%dMiB cpu=%g pids=%d", c.Budget.Agent.MemoryMiB, c.Budget.Agent.CPUs, c.Budget.Agent.Processes, c.MaxResources, c.Budget.Helper.MemoryMiB, c.Budget.Helper.CPUs, c.Budget.Helper.Processes)
 	return nil
+}
+
+func processLimits(b config.ProcessBudget) execution.Limits {
+	return execution.Limits{MemoryBytes: int64(b.MemoryMiB) << 20, CPUs: b.CPUs, Processes: b.Processes}
 }
 
 func probeExecution(ctx context.Context, exe string, env []string, limits execution.Limits) error {
@@ -164,12 +176,9 @@ func executionEnvironment(env []string) []string {
 	return out
 }
 
-// Admission is nonblocking: an executing parent can synchronously delegate, so
-// waiting here could deadlock a full pool. Existing per-conversation scheduling
-// remains responsible for its own queue. Each transcript has one live writer.
-func limitSessionFactory(next agent.SessionFactory, max int) agent.SessionFactory {
+// Keep one live writer per transcript, without a shared Agent count limit.
+func singleWriterSessionFactory(next agent.SessionFactory) agent.SessionFactory {
 	var mu sync.Mutex
-	active := 0
 	writers := map[string]bool{}
 	return func(ctx context.Context, opts agentcore.Options) (agent.RuntimeSession, error) {
 		if err := ctx.Err(); err != nil {
@@ -177,40 +186,45 @@ func limitSessionFactory(next agent.SessionFactory, max int) agent.SessionFactor
 		}
 		key := ""
 		if opts.Transcript != nil && opts.SessionID != "" {
-			key, _ = filepath.Abs(opts.Transcript.MainPath(opts.SessionID))
+			var err error
+			key, err = filepath.Abs(opts.Transcript.MainPath(opts.SessionID))
+			if err != nil {
+				return nil, err
+			}
 		}
 		mu.Lock()
-		if active >= max || key != "" && writers[key] {
+		if key != "" && writers[key] {
 			mu.Unlock()
-			return nil, ErrExecutionBusy
+			return nil, ErrTranscriptBusy
 		}
-		active++
 		if key != "" {
 			writers[key] = true
 		}
 		mu.Unlock()
-		release := func() { mu.Lock(); active--; delete(writers, key); mu.Unlock() }
+		release := func() { mu.Lock(); delete(writers, key); mu.Unlock() }
 		session, err := next(ctx, opts)
 		if err != nil {
-			release()
+			var cleanup *execution.CleanupError
+			if !errors.As(err, &cleanup) {
+				release()
+			}
 			return nil, err
 		}
-		return &limitedSession{RuntimeSession: session, release: release}, nil
+		return &writerSession{RuntimeSession: session, release: release}, nil
 	}
 }
 
-type limitedSession struct {
+type writerSession struct {
 	agent.RuntimeSession
 	once     sync.Once
 	release  func()
 	closeErr error
 }
 
-func (s *limitedSession) Close() error {
+func (s *writerSession) Close() error {
 	s.once.Do(func() {
 		s.closeErr = s.RuntimeSession.Close()
-		// Failed cleanup keeps capacity reserved; a still-live process must never
-		// make room for overlapping work.
+		// Keep the transcript reserved while cleanup has not proved its writer dead.
 		if s.closeErr == nil {
 			s.release()
 		}

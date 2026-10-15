@@ -94,19 +94,11 @@ func run() int {
 	defer stop()
 	ctx, shutdown := shutdownContext(sigCtx)
 	defer shutdown(agent.AbortShutdown)
-	executionConfig, err := config.Execution()
+	// Read persisted budgets before starting any supervised or background work.
+	mgr, err := server.NewManagerWithExecution(ctx, *dataDir, *proxy)
 	if err != nil {
-		log.Printf("execution configuration: %v", err)
+		log.Printf("initialize stores and execution: %v", err)
 		return 1
-	}
-	if err := server.ConfigureExecution(ctx, executionConfig); err != nil {
-		log.Printf("execution initialization: %v", err)
-		return 1
-	}
-
-	mgr, err := server.NewManager(*dataDir, *proxy)
-	if err != nil {
-		log.Fatalf("open stores: %v", err)
 	}
 	defer mgr.Close()
 

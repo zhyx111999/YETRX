@@ -5,73 +5,97 @@ import (
 	"sync"
 )
 
-// sessionLimiter caps the tasks running at once per owner session: every run of
-// one conversation shares the same limit, and conversations never share it with
-// each other, so a busy, cancelled or draining conversation cannot starve another.
-//
-// A slot is held from acquire until the returned release runs. execute releases
-// only after its runner has really returned, so cancellation, timeouts and
-// shutdown never free a slot that a live runner still occupies.
-//
-// Bookkeeping exists only while a conversation has a task running or queued:
-// the last release or abandoned wait removes its entry. The limiter's lock is
-// private, held for map updates only, and never taken together with Manager.mu.
+// sessionLimiter keeps independent, live-adjustable limits per owner. Running
+// tasks retain their slots until the runner exits, even after a limit decrease.
+// Its private lock is never held together with Manager.mu.
 type sessionLimiter struct {
-	limit int
-
 	mu    sync.Mutex
+	limit int
 	gates map[string]*gate
 }
 
-// gate is one conversation's slots.
 type gate struct {
-	slots chan struct{} // one token per running task
-	users int           // tasks running or queued; guarded by sessionLimiter.mu
+	active  int
+	users   int // Running and queued tasks, guarded by sessionLimiter.mu.
+	changed chan struct{}
 }
 
 func newSessionLimiter(limit int) *sessionLimiter {
 	return &sessionLimiter{limit: limit, gates: make(map[string]*gate)}
 }
 
-// acquire waits until owner has a free slot and returns the function that gives
-// it back; the caller must call it exactly once. If ctx ends first, including
-// when a slot and cancellation are ready together, no slot is taken and ctx's
-// error comes back.
-func (l *sessionLimiter) acquire(ctx context.Context, owner string) (release func(), err error) {
-	g := l.join(owner)
-	select {
-	case g.slots <- struct{}{}:
-	case <-ctx.Done():
-		l.leave(owner, g)
-		return nil, ctx.Err()
-	}
-	if err := ctx.Err(); err != nil {
-		<-g.slots
-		l.leave(owner, g)
-		return nil, err
-	}
-	return func() {
-		<-g.slots
-		l.leave(owner, g)
-	}, nil
-}
-
-func (l *sessionLimiter) join(owner string) *gate {
+func (l *sessionLimiter) setLimit(limit int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.limit == limit {
+		return
+	}
+	l.limit = limit
+	for _, g := range l.gates {
+		g.notify()
+	}
+}
+
+func (l *sessionLimiter) currentLimit() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.limit
+}
+
+func (g *gate) notify() {
+	close(g.changed)
+	g.changed = make(chan struct{})
+}
+
+// acquire waits for capacity or cancellation. A resize wakes queued tasks
+// without replacing their gate or losing reservations held by live runners.
+func (l *sessionLimiter) acquire(ctx context.Context, owner string) (func(), error) {
+	l.mu.Lock()
 	g := l.gates[owner]
 	if g == nil {
-		g = &gate{slots: make(chan struct{}, l.limit)}
+		g = &gate{changed: make(chan struct{})}
 		l.gates[owner] = g
 	}
 	g.users++
-	return g
+	for {
+		if err := ctx.Err(); err != nil {
+			l.leave(owner, g)
+			l.mu.Unlock()
+			return nil, err
+		}
+		if g.active < l.limit {
+			g.active++
+			l.mu.Unlock()
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					l.mu.Lock()
+					g.active--
+					l.leave(owner, g)
+					g.notify()
+					l.mu.Unlock()
+				})
+			}
+			if err := ctx.Err(); err != nil {
+				release()
+				return nil, err
+			}
+			return release, nil
+		}
+		changed := g.changed
+		l.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+		}
+		l.mu.Lock()
+	}
 }
 
+// leave runs with l.mu held. Empty gates retain no owner references.
 func (l *sessionLimiter) leave(owner string, g *gate) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if g.users--; g.users == 0 {
+	g.users--
+	if g.users == 0 {
 		delete(l.gates, owner)
 	}
 }

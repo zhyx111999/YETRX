@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -8,29 +9,64 @@ import (
 	"strings"
 )
 
-// ExecutionSettings controls supervised sessions and their resource helpers.
-// OS limits are mandatory when enabled. Environment settings are intentionally
-// resolved before opening stores or starting any background execution.
-type ExecutionSettings struct {
-	Enabled           bool
-	MaxSessions       int
-	MemoryMiB         int
-	CPUs              float64
-	Processes         int
-	MaxResources      int
-	ResourceMemoryMiB int
-	ResourceCPUs      float64
-	ResourceProcesses int
-	TotalMemoryMiB    int
-	TotalCPUs         float64
-	TotalProcesses    int
+const (
+	DefaultResourceWorkers  = 64
+	MaxExecutionConcurrency = 1024
+	ResourceWorkersSetting  = "resource_max_workers"
+	ExecutionBudgetSetting  = "execution_budget"
+)
+
+// ProcessBudget applies to an execution tree, or to all worker trees together.
+type ProcessBudget struct {
+	MemoryMiB int     `json:"memory_mib"`
+	CPUs      float64 `json:"cpus"`
+	Processes int     `json:"processes"`
 }
 
-func Execution() (ExecutionSettings, error) {
+type ExecutionBudget struct {
+	Agent  ProcessBudget `json:"agent"`
+	Helper ProcessBudget `json:"helper"`
+	Total  ProcessBudget `json:"total"`
+}
+
+func (b ExecutionBudget) Validate() error {
+	for _, group := range []struct {
+		name   string
+		budget ProcessBudget
+	}{{"agent", b.Agent}, {"helper", b.Helper}, {"total", b.Total}} {
+		v := group.budget
+		if v.MemoryMiB < 1 || v.MemoryMiB > 1048576 || v.Processes < 1 || v.Processes > 1048576 {
+			return fmt.Errorf("%s memory_mib and processes must be integers between 1 and 1048576", group.name)
+		}
+		if math.IsNaN(v.CPUs) || math.IsInf(v.CPUs, 0) || v.CPUs <= 0 || v.CPUs > 1024 {
+			return fmt.Errorf("%s cpus must be a positive finite core count up to 1024", group.name)
+		}
+	}
+	return nil
+}
+
+// ExecutionSettings has no shared Agent session count cap. OS budgets remain
+// mandatory when enabled; persisted settings are resolved before workers start.
+type ExecutionSettings struct {
+	Enabled      bool
+	MaxResources int
+	Budget       ExecutionBudget
+}
+
+type SettingLookup func(string) (string, bool, error)
+
+func Execution() (ExecutionSettings, error) { return ExecutionWithSettings(nil) }
+
+// ExecutionWithSettings gives saved UI values precedence over environment
+// fallbacks. The explicit isolation opt-out remains environment-only.
+func ExecutionWithSettings(lookup SettingLookup) (ExecutionSettings, error) {
 	c := ExecutionSettings{
-		Enabled: true, MaxSessions: 32, MemoryMiB: 512, CPUs: 1, Processes: 128,
-		MaxResources: 64, ResourceMemoryMiB: 384, ResourceCPUs: 1, ResourceProcesses: 128,
-		TotalMemoryMiB: 3072, TotalCPUs: 4, TotalProcesses: 1024,
+		Enabled: true, MaxResources: DefaultResourceWorkers,
+		Budget: ExecutionBudget{
+			Agent:  ProcessBudget{MemoryMiB: 512, CPUs: 1, Processes: 128},
+			Helper: ProcessBudget{MemoryMiB: 384, CPUs: 1, Processes: 128},
+			Total:  ProcessBudget{MemoryMiB: 3072, CPUs: 4, Processes: 1024},
+		},
 	}
 	if raw, ok := os.LookupEnv("ARTEX_EXECUTION_ENABLED"); ok {
 		v, err := strconv.ParseBool(strings.TrimSpace(raw))
@@ -39,41 +75,65 @@ func Execution() (ExecutionSettings, error) {
 		}
 		c.Enabled = v
 	}
-	for _, field := range []struct {
-		name string
-		dst  *int
-		max  int
-	}{
-		{"ARTEX_EXECUTION_MAX_SESSIONS", &c.MaxSessions, 1024},
-		{"ARTEX_EXECUTION_MEMORY_MIB", &c.MemoryMiB, 1048576},
-		{"ARTEX_EXECUTION_PROCESSES", &c.Processes, 1048576},
-		{"ARTEX_RESOURCE_MAX_WORKERS", &c.MaxResources, 1024},
-		{"ARTEX_RESOURCE_MEMORY_MIB", &c.ResourceMemoryMiB, 1048576},
-		{"ARTEX_RESOURCE_PROCESSES", &c.ResourceProcesses, 1048576},
-		{"ARTEX_EXECUTION_TOTAL_MEMORY_MIB", &c.TotalMemoryMiB, 1048576},
-		{"ARTEX_EXECUTION_TOTAL_PROCESSES", &c.TotalProcesses, 1048576},
-	} {
-		if raw, ok := os.LookupEnv(field.name); ok {
-			v, err := strconv.Atoi(strings.TrimSpace(raw))
-			if err != nil || v <= 0 || v > field.max {
-				return c, fmt.Errorf("%s must be between 1 and %d", field.name, field.max)
+	read := func(key string) (string, bool, error) {
+		if lookup == nil {
+			return "", false, nil
+		}
+		return lookup(key)
+	}
+	resourceRaw, resourceSaved, err := read(ResourceWorkersSetting)
+	if err != nil {
+		return c, err
+	}
+	resourceSource := ResourceWorkersSetting
+	if !resourceSaved {
+		resourceRaw, resourceSaved = os.LookupEnv("ARTEX_RESOURCE_MAX_WORKERS")
+		resourceSource = "ARTEX_RESOURCE_MAX_WORKERS"
+	}
+	if resourceSaved {
+		n, err := strconv.Atoi(strings.TrimSpace(resourceRaw))
+		if err != nil || n < 1 || n > MaxExecutionConcurrency {
+			return c, fmt.Errorf("%s must be between 1 and %d", resourceSource, MaxExecutionConcurrency)
+		}
+		c.MaxResources = n
+	}
+	budgetRaw, budgetSaved, err := read(ExecutionBudgetSetting)
+	if err != nil {
+		return c, err
+	}
+	if budgetSaved {
+		var budget ExecutionBudget
+		if err := json.Unmarshal([]byte(budgetRaw), &budget); err != nil {
+			return c, fmt.Errorf("invalid saved execution budget: %w", err)
+		}
+		c.Budget = budget
+	} else {
+		for _, group := range []struct {
+			prefix string
+			budget *ProcessBudget
+		}{{"ARTEX_EXECUTION", &c.Budget.Agent}, {"ARTEX_RESOURCE", &c.Budget.Helper}, {"ARTEX_EXECUTION_TOTAL", &c.Budget.Total}} {
+			for _, field := range []struct {
+				suffix string
+				dst    *int
+			}{{"MEMORY_MIB", &group.budget.MemoryMiB}, {"PROCESSES", &group.budget.Processes}} {
+				key := group.prefix + "_" + field.suffix
+				if raw, ok := os.LookupEnv(key); ok {
+					n, err := strconv.Atoi(strings.TrimSpace(raw))
+					if err != nil || n < 1 || n > 1048576 {
+						return c, fmt.Errorf("%s must be between 1 and 1048576", key)
+					}
+					*field.dst = n
+				}
 			}
-			*field.dst = v
+			key := group.prefix + "_CPUS"
+			if raw, ok := os.LookupEnv(key); ok {
+				n, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+				if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n <= 0 || n > 1024 {
+					return c, fmt.Errorf("%s must be a positive finite core count up to 1024", key)
+				}
+				group.budget.CPUs = n
+			}
 		}
 	}
-	for _, field := range []struct {
-		name string
-		dst  *float64
-	}{
-		{"ARTEX_EXECUTION_CPUS", &c.CPUs}, {"ARTEX_RESOURCE_CPUS", &c.ResourceCPUs}, {"ARTEX_EXECUTION_TOTAL_CPUS", &c.TotalCPUs},
-	} {
-		if raw, ok := os.LookupEnv(field.name); ok {
-			v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-			if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 || v > 1024 {
-				return c, fmt.Errorf("%s must be a positive finite core count up to 1024", field.name)
-			}
-			*field.dst = v
-		}
-	}
-	return c, nil
+	return c, c.Budget.Validate()
 }

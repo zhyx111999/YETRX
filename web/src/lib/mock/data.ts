@@ -3307,6 +3307,11 @@ export const tools: Tool[] = [
 ];
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+const executionBudget = {
+  agent: { memory_mib: 512, cpus: 1, processes: 128 },
+  helper: { memory_mib: 384, cpus: 1, processes: 128 },
+  total: { memory_mib: 3072, cpus: 4, processes: 1024 },
+};
 export const settings: Settings = {
   traffic_capture: true,
   agent_traffic_binding: false,
@@ -3319,6 +3324,12 @@ export const settings: Settings = {
   global_proxy: "",
   python_interpreter: "/usr/bin/python3",
   workers: 8,
+  resource_max_workers: 64,
+  subagent_concurrency: 16,
+  resource_execution_enabled: true,
+  execution_budget: structuredClone(executionBudget),
+  execution_budget_active: structuredClone(executionBudget),
+  execution_budget_restart_required: false,
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
   noa_compaction: false,

@@ -26,10 +26,15 @@ func (s *Server) initWorkflows() {
 	if err := s.upgradeDelegationDescriptions(); err != nil {
 		log.Printf("[delegation] tool description upgrade: %v", err)
 	}
+	concurrency, err := subagentConcurrency(s.m.pg)
+	if err != nil {
+		log.Printf("[workflow] concurrency configuration: %v", err)
+		return
+	}
 	s.workflowEpoch = time.Now()
 	ready := make(chan struct{})
 	defer close(ready)
-	manager, err := workflow.New(s.ctx, filepath.Join(s.m.dir, "workflows"), workflow.DefaultConcurrency, s.runWorkflowTask, func(run workflow.Run) {
+	manager, err := workflow.New(s.ctx, filepath.Join(s.m.dir, "workflows"), concurrency, s.runWorkflowTask, func(run workflow.Run) {
 		<-ready // Startup interruption callbacks must see the assigned manager.
 		s.workflowCompleted(run)
 	})

@@ -105,6 +105,18 @@ func New(ctx context.Context, dir string, concurrency int, runner Runner, onComp
 	return m, nil
 }
 
+// SetConcurrency changes every owner's admission limit without stopping live
+// runners. Queued tasks are woken immediately when capacity increases.
+func (m *Manager) SetConcurrency(limit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("%w: concurrency must be positive", ErrInvalid)
+	}
+	m.limiter.setLimit(limit)
+	return nil
+}
+
+func (m *Manager) Concurrency() int { return m.limiter.currentLimit() }
+
 // Start validates tasks and begins running them in the background; it returns
 // the run id at once. depth is the caller's nesting depth (0 for the top-level
 // assistant; use Job.Depth inside a Runner). Tasks without DependsOn start

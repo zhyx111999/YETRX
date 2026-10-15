@@ -48,6 +48,7 @@ const mockLLMRecords = structuredClone(D.llmRecords);
 const mockTaskTemplates = structuredClone(D.taskTemplates);
 const mockTaskCategories = structuredClone(D.taskCategories);
 const mockConversations = structuredClone(D.conversations);
+const mockSettings = structuredClone(D.settings);
 const mockRetests: FindingRetest[] = [];
 const mockRetestMessages: Record<number, Activity[]> = {};
 
@@ -2218,9 +2219,20 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/traffic/hosts") return { hosts: D.trafficHosts };
   if (path === "/traffic") return D.traffic;
   if (path === "/traffic/exchange") return D.trafficDetail;
-  if (path === "/settings" && m === "GET") return D.settings;
-  if (path === "/settings" && m === "PUT") return { ...D.settings, ...b };
-  if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
+  if (path === "/settings" && m === "GET") return structuredClone(mockSettings);
+  if (path === "/settings" && m === "PUT") {
+    const { resource_execution_enabled: _enabled, execution_budget_active: _active,
+      execution_budget_restart_required: _pending, ...patch } = b;
+    Object.assign(mockSettings, patch);
+    const target = mockSettings.execution_budget;
+    const active = mockSettings.execution_budget_active;
+    mockSettings.execution_budget_restart_required = !!target && !!active &&
+      (Object.keys(target) as Array<keyof typeof target>).some((key) =>
+        target[key].memory_mib !== active[key].memory_mib || target[key].cpus !== active[key].cpus ||
+        target[key].processes !== active[key].processes);
+    return structuredClone(mockSettings);
+  }
+  if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: mockSettings.web_search_backend };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")
     return { reply: "（demo）我已把该建议注入为一条高优意图，work agent 会尽快执行。", mode: "hint" };

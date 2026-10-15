@@ -919,6 +919,18 @@ export interface TrafficHost {
 }
 
 // ---- App settings (runtime toggles) ----
+export interface ProcessBudget {
+  memory_mib: number;
+  cpus: number;
+  processes: number;
+}
+
+export interface ExecutionBudget {
+  agent: ProcessBudget;
+  helper: ProcessBudget;
+  total: ProcessBudget;
+}
+
 export interface Settings {
   traffic_capture: boolean;
   agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
@@ -940,6 +952,12 @@ export interface Settings {
   python_interpreter?: string; // 自定义脚本工具的 python 解释器路径(空=运行时检测)
   chat_file_max_mib?: number; // Agent 发文件的单文件上限（MiB），默认 128；0 表示不限制
   workers?: number; // Per-exploration Worker slots (default 8), independent of subagents.
+  resource_max_workers?: number;
+  subagent_concurrency?: number;
+  resource_execution_enabled?: boolean; // Read-only; explicit opt-out remains environment-only.
+  execution_budget?: ExecutionBudget; // Saved target; applied at service startup.
+  execution_budget_active?: ExecutionBudget | null;
+  execution_budget_restart_required?: boolean;
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
   task_concurrency_enabled?: boolean; // 默认 false
   task_concurrency_limit?: number; // 开启后默认 5

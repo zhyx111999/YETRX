@@ -16,6 +16,8 @@ import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSend
 import type { Settings } from "@/lib/types";
 
 import { ChatFileSettingsCard } from "./_components/chat-file-settings-card";
+import { ConcurrencySettingsCard } from "./_components/concurrency-settings-card";
+import { ExecutionBudgetSettingsCard } from "./_components/execution-budget-settings-card";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -28,6 +30,7 @@ export default function SystemSettingsPage() {
   const [tavilyKeySet, setTavilyKeySet] = React.useState(false);
   const [tavilyKeyInput, setTavilyKeyInput] = React.useState("");
   const [chatFileMaxMiB, setChatFileMaxMiB] = React.useState<number | undefined>(undefined);
+  const [executionSettings, setExecutionSettings] = React.useState<Settings | null>(null);
   const [savingTavilyKey, setSavingTavilyKey] = React.useState(false);
   const [proxyInput, setProxyInput] = React.useState("");
   const [savingProxy, setSavingProxy] = React.useState(false);
@@ -63,6 +66,7 @@ export default function SystemSettingsPage() {
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
     setChatFileMaxMiB(s.chat_file_max_mib);
+    setExecutionSettings(s);
   }, []);
 
   const saveWorkers = () => {
@@ -272,6 +276,8 @@ export default function SystemSettingsPage() {
         <UpdateCard />
 
         <ChatFileSettingsCard limit={chatFileMaxMiB} loaded={loaded} onSaved={setChatFileMaxMiB} />
+        <ConcurrencySettingsCard settings={executionSettings} loaded={loaded} onSaved={setExecutionSettings} />
+        <ExecutionBudgetSettingsCard settings={executionSettings} loaded={loaded} onSaved={setExecutionSettings} />
 
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>
@@ -663,7 +669,7 @@ export default function SystemSettingsPage() {
               每个探索任务的执行槽位数（Worker，默认 8），不是累计子任务数量。规划者持续规划，执行器逐条领取探索意图并执行；并发越高，消耗越高。修改后
               <b>对之后启动的探索任务生效</b>，正在运行的任务不受影响。
               <br />
-              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验。每个对话独享 16 个子代理并发名额，同一对话内多批运行共用；不同对话的调度名额独立，但所有角色仍受全局执行池和资源预算限制。
+              此项不控制 <code>subagents</code> 子代理。子代理用于独立求证、审查和小范围修改，结果由主对话核验；每父对话的并发在「执行并发」中配置，默认 16。不设全局 Agent 数量上限，但所有角色仍受执行安全预算限制。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -672,7 +678,7 @@ export default function SystemSettingsPage() {
                 type="number"
                 min={1}
                 className="w-32 font-mono text-sm"
-                placeholder="3"
+                placeholder="8"
                 value={workers}
                 aria-label="每个探索任务的子任务执行槽位数"
                 disabled={!loaded || savingWorkers}

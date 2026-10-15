@@ -32,11 +32,45 @@ type Config struct {
 	Start      StartFunc
 }
 
-// Runtime is an immutable configuration snapshot with independent, nonblocking
+// Runtime keeps immutable process configuration and live-adjustable, nonblocking
 // admission. Capacity is released only after the entire process tree is reaped.
 type Runtime struct {
 	config Config
-	slots  chan struct{}
+	mu     sync.Mutex
+	limit  int
+	active int
+}
+
+func (r *Runtime) SetMaxWorkers(limit int) error {
+	if limit <= 0 {
+		return errors.New("resourceexec: capacity must be positive")
+	}
+	r.mu.Lock()
+	r.limit = limit
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Runtime) MaxWorkers() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.limit
+}
+
+func (r *Runtime) acquire() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active >= r.limit {
+		return false
+	}
+	r.active++
+	return true
+}
+
+func (r *Runtime) release() {
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
 }
 
 func New(c Config) (*Runtime, error) {
@@ -85,7 +119,7 @@ func New(c Config) (*Runtime, error) {
 	if c.Start == nil {
 		c.Start = execution.Start
 	}
-	return &Runtime{config: c, slots: make(chan struct{}, c.MaxWorkers)}, nil
+	return &Runtime{config: c, limit: c.MaxWorkers}, nil
 }
 
 type MCPConfig struct {
@@ -138,9 +172,10 @@ type processClient struct {
 }
 
 func (r *Runtime) start(ctx context.Context, init initRequest) (*processClient, error) {
-	select {
-	case r.slots <- struct{}{}:
-	default:
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !r.acquire() {
 		return nil, ErrBusy
 	}
 	c := r.config
@@ -150,17 +185,20 @@ func (r *Runtime) start(ctx context.Context, init initRequest) (*processClient, 
 	}
 	p, err := c.Start(ctx, c.Executable, c.Args, c.Env, limits, nil)
 	if err != nil {
-		<-r.slots
+		var cleanup *execution.CleanupError
+		if !errors.As(err, &cleanup) {
+			r.release()
+		}
 		return nil, err
 	}
 	if p == nil {
-		<-r.slots
+		r.release()
 		return nil, errors.New("resourceexec: Start returned nil process")
 	}
 	go func() {
 		_ = p.Wait()
 		if p.Close() == nil {
-			<-r.slots
+			r.release()
 		}
 	}()
 	cl := &processClient{process: p, ctx: ctx}
