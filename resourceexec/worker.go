@@ -127,12 +127,12 @@ func (w *resourceWorker) init(ctx context.Context, raw json.RawMessage) (json.Ra
 		var err error
 		cl, err = ConnectDirect(ctx, w.ctx, *req.MCP)
 		if err != nil {
-			return nil, err
+			return nil, mcpUnavailable(ctx, err)
 		}
 		ts, err = cl.Tools(ctx)
 		if err != nil {
 			_ = cl.Close()
-			return nil, err
+			return nil, mcpUnavailable(ctx, err)
 		}
 	}
 	tools := map[string]tool.CoreTool{}

@@ -467,9 +467,12 @@ func TestCustomCommandProcessAndProxy(t *testing.T) {
 	if err != nil || res.IsError || !strings.Contains(res.Flatten(), "quoted value") || !strings.Contains(res.Flatten(), "inherited-command-env") {
 		t.Fatalf("command %s %v", res.Flatten(), err)
 	}
-	// Git Bash prints Windows temporary paths with forward slashes.
-	normalized := strings.ReplaceAll(strings.ToLower(res.Flatten()), "\\", "/")
-	if !strings.Contains(normalized, strings.ToLower(strings.ReplaceAll(dir, "\\", "/")[2:])) {
+	// Compare directory identity: Windows may report an 8.3 temporary path in
+	// TempDir while PowerShell expands it to the equivalent long path.
+	lines := strings.Split(strings.TrimSpace(res.Flatten()), "\n")
+	actual, actualErr := os.Stat(strings.TrimSpace(lines[len(lines)-1]))
+	expected, expectedErr := os.Stat(dir)
+	if actualErr != nil || expectedErr != nil || !os.SameFile(actual, expected) {
 		t.Fatalf("command cwd missing: %s want %s", res.Flatten(), dir)
 	}
 	assertDead(t, int(pid.Load()))

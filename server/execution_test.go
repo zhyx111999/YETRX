@@ -59,6 +59,35 @@ func TestExecutionProcessKeepsSharedRolesAndResponseDelivery(t *testing.T) {
 	}
 	t.Cleanup(func() { agent.SetSessionFactory(nil); _ = ConfigureResourceExecution(nil) })
 	t.Run("roles", TestSharedExecutionRolesUseTheSameCatalog)
+	t.Run("mcp-unavailable", func(t *testing.T) {
+		e := newNativeEnv(t)
+		id, err := e.pg.SaveMCP(&db.MCPServer{Name: "invalid_mcp_fixture", Transport: "http", Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = e.pg.DeleteMCP(id) })
+		tools, def, cleanup := agent.ToolAugment(t.Context(), "agent")
+		if cleanup != nil {
+			cleanup()
+		}
+		if def.Err != nil || len(tools) == 0 {
+			t.Fatalf("optional MCP blocked shared resources: %v", def.Err)
+		}
+		current := resourceRuntime.Load()
+		t.Cleanup(func() { resourceRuntime.Store(current) })
+		if err := ConfigureResourceExecution(&resourceexec.Config{Start: func(context.Context, string, []string, []string, execution.Limits, execution.Handler) (*execution.Process, error) {
+			return nil, execution.ErrLimitsUnavailable
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		_, def, cleanup = agent.ToolAugment(t.Context(), "agent")
+		if cleanup != nil {
+			cleanup()
+		}
+		if !errors.Is(def.Err, execution.ErrLimitsUnavailable) {
+			t.Fatalf("hard isolation failure ignored: %v", def.Err)
+		}
+	})
 	t.Run("response", TestResponseBoundaryShowsResultsAfterTheResponseAndTheNextRequestReadsThem)
 	t.Run("final", TestResponseBoundaryFinalResponseKeepsAutomaticFollowUp)
 	t.Run("stop", TestResponseBoundaryStopKeepsDisplayedResultAndFollowsUpWithoutRerunningTheTool)

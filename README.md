@@ -94,6 +94,8 @@ Agent 可调用全局 `send_file` 工具，将已生成的文件直接发到当�
 
 Linux 需要 cgroup v2 与 systemd `Delegate=yes`，服务使用 `KillMode=control-group`。启动先准备限制并验证子进程握手，无法实施限制时明确失败。Windows 使用嵌套 Job Object；其他平台目前需显式设置 `ARTEX_EXECUTION_ENABLED=false` 使用原生进程内路径。关闭开关不会删除用户数据或配置。
 
+可选 MCP 的配置、连接或工具目录错误沿用原有容错：记录错误，继续装配其他已启用资源。进程启动、硬限额、容量、IPC 和清理错误会阻止本次执行，绝不转到未隔离路径。
+
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `ARTEX_EXECUTION_ENABLED` | `true` | 启用进程隔离 |

@@ -165,7 +165,9 @@ func (r *Runtime) start(ctx context.Context, init initRequest) (*processClient, 
 	}()
 	cl := &processClient{process: p, ctx: ctx}
 	if err = p.Peer.Call(ctx, "init", init, nil); err != nil {
-		_ = cl.Close()
+		if closeErr := cl.Close(); closeErr != nil {
+			return nil, closeErr
+		}
 		return nil, err
 	}
 	return cl, nil

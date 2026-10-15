@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/resourceexec"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
 	actool "github.com/Autumn-27/norma/tool"
@@ -54,6 +56,13 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		setupError := func(name string, err error) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 			return nil, agent.DeferredInfo{Err: fmt.Errorf("MCP %s unavailable: %w", name, err)}, cleanup
 		}
+		optionalMCPError := func(name string, err error) bool {
+			if ctx.Err() != nil || resourceRuntime.Load() != nil && !errors.Is(err, resourceexec.ErrMCPUnavailable) {
+				return false
+			}
+			log.Printf("[mcp] %s unavailable; remaining enabled resources retained: %v", name, err)
+			return true
+		}
 		serverTools := map[string][]string{} // server name → its tool names
 		var allNames, globalNames []string
 		globalSet := map[string]bool{}
@@ -69,13 +78,22 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				skillGated := gated[m.Name]
 				cl, err := connectMCP(ctx, m)
 				if err != nil {
+					if optionalMCPError(m.Name, err) {
+						continue
+					}
+					return setupError(m.Name, err)
+				}
+				ts, err := cl.Tools(ctx)
+				if err != nil {
+					if closeErr := cl.Close(); closeErr != nil {
+						return setupError(m.Name, closeErr)
+					}
+					if optionalMCPError(m.Name, err) {
+						continue
+					}
 					return setupError(m.Name, err)
 				}
 				closers = append(closers, cl)
-				ts, err := cl.Tools(ctx)
-				if err != nil {
-					return setupError(m.Name, err)
-				}
 				for _, t := range ts {
 					extra = append(extra, t)
 					allNames = append(allNames, t.Name())
