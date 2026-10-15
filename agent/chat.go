@@ -210,7 +210,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		MaxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}
 	if control.Child {
-		opts.DisallowedTools = []string{"subagents", "subagents_control"}
+		opts.DisallowedTools = childDisallowedTools()
 	}
 	if c.guard != nil {
 		opts.Hooks = c.guard.Hooks()

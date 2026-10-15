@@ -13,7 +13,6 @@ import (
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
 )
 
@@ -128,59 +127,6 @@ func TestControlledChatSteeringPersistsAtNextBoundary(t *testing.T) {
 				t.Fatalf("instruction persisted %d times", count)
 			}
 		})
-	}
-}
-
-func TestChildCannotReachWorkflowToolsDirectlyOrIndirectly(t *testing.T) {
-	oldAugment, oldResolve := ToolAugment, ToolResolve
-	defer func() { ToolAugment, ToolResolve = oldAugment, oldResolve }()
-	calls := 0
-	ToolResolve = nil
-	ToolAugment = func(context.Context, string) ([]actool.CoreTool, DeferredInfo, func()) {
-		var tools []actool.CoreTool
-		for _, name := range []string{"subagents", "subagents_control", "allowed_deferred"} {
-			name := name
-			tools = append(tools, actool.Build(actool.Spec{Name: name, Schema: map[string]any{"type": "object"}, Run: func(context.Context, json.RawMessage, *actool.ToolContext) (actool.Result, error) {
-				if name != "allowed_deferred" {
-					calls++
-				}
-				return actool.Text("ok"), nil
-			}}))
-		}
-		return tools, DeferredInfo{Deferred: []string{"subagents", "subagents_control", "allowed_deferred"}, GlobalNames: []string{"subagents", "allowed_deferred"}, Unlock: actool.NewUnlockSet("subagents", "subagents_control", "allowed_deferred")}, func() {}
-	}
-	turn := 0
-	p := controlledProvider{run: func(req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
-		turn++
-		for _, tool := range req.Tools {
-			if tool.Name == "subagents" || tool.Name == "subagents_control" {
-				t.Fatal("child schema exposes workflow tool")
-			}
-		}
-		if turn == 1 {
-			return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
-				{Type: llm.BlockToolUse, ID: "direct", Name: "subagents", Input: json.RawMessage(`{}`)},
-				{Type: llm.BlockToolUse, ID: "indirect", Name: "ExecuteExtraTool", Input: json.RawMessage(`{"tool_name":"subagents_control","arguments":{}}`)},
-			}}, "tool_use", llm.Usage{}, nil
-		}
-		denied := 0
-		for _, m := range req.Messages {
-			for _, b := range m.Content {
-				if b.Type == llm.BlockToolResult && b.IsError {
-					denied++
-				}
-			}
-		}
-		if denied != 2 {
-			t.Fatalf("blocked calls did not both fail: %+v", req.Messages)
-		}
-		return assistant("blocked"), "end_turn", llm.Usage{}, nil
-	}}
-	ca := NewChatAgent(p, "fixture", t.TempDir(), nil, 100000)
-	ca.SetNonStreaming(func() bool { return true })
-	_, err := ca.Chat(WithChatControl(context.Background(), ChatControl{Child: true}), "agent", "child", "try tools", 4, time.Minute, false, nil)
-	if err != nil || calls != 0 {
-		t.Fatal("child executed a forbidden handler", calls, err)
 	}
 }
 

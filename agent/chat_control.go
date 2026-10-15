@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Autumn-27/norma/agentcore"
@@ -30,8 +31,22 @@ func chatControlFrom(ctx context.Context) ChatControl {
 	return control
 }
 
+// IsChildChat reports whether ctx belongs to a child conversation (subagent).
+// Host tool handlers use it as a second line of defence behind childTools.
+func IsChildChat(ctx context.Context) bool { return chatControlFrom(ctx).Child }
+
+// childDelegationTools is the only list of delegation entry points a child
+// conversation may not use: subagents (conversation delegation) and spawn_task
+// (exploration delegation). Schema filtering, deferred/global names and the
+// permission deny rule are all derived from it. Exploration's internal
+// Planner->Worker flow never runs under a child ChatControl and is unaffected.
+var childDelegationTools = []string{"subagents", "subagents_control", "spawn_task"}
+
+// childDisallowedTools returns a fresh deny-rule list for agentcore.Options.
+func childDisallowedTools() []string { return slices.Clone(childDelegationTools) }
+
 func childTools(tools []actool.CoreTool, def DeferredInfo) ([]actool.CoreTool, DeferredInfo) {
-	blocked := func(name string) bool { return name == "subagents" || name == "subagents_control" }
+	blocked := func(name string) bool { return slices.Contains(childDelegationTools, name) }
 	out := make([]actool.CoreTool, 0, len(tools))
 	for _, t := range tools {
 		if !blocked(t.Name()) {

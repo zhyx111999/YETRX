@@ -253,7 +253,11 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "可选：planner 心跳触发间隔(秒)。距上轮规划结束/任务开始满该值且期间无触发 → 触发一轮规划(兜底死锁 + 唤醒去监督飞行中的 worker)。留空或 0 = 默认 600(10min)；"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "可选：对于简单任务可开启，创建时直接下发一条种子意图(内容=描述+目标)让 worker 免等首轮 planner 直接开跑测试；默认 false(走标准先规划再执行)。"},
 		}, "description", "goal"),
-		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			// 子代理不得再派探索任务：ChatControl 与 workflowCaller.Depth 任一标记命中即拒绝，且早于任何校验/建任务。
+			if owner, ok := ctx.Value(workflowCallerKey{}).(workflowCaller); agent.IsChildChat(ctx) || ok && owner.Depth > 0 {
+				return actool.Errorf("子代理不能创建探索子任务；请把需要持续探索的目标交回主对话处理"), nil
+			}
 			var a struct {
 				Description          string          `json:"description"`
 				Goal                 string          `json:"goal"`
