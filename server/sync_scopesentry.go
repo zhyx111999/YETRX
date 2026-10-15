@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/mcphttp"
 )
 
 // 资产同步（ScopeSentry 数据源）。
@@ -19,7 +18,7 @@ import (
 // 拉取子域名、Web 应用、服务等资产，映射为 ARTEX 的公司 + 资产模型。数据源本身是
 // 一个名为 "ScopeSentry" 的 http 传输 MCP 行（url + X-API-Key 头保存在 mcp_servers）。
 //
-// 与 agent 工具层不同，这里用 mcphttp.Client.Call 直接调用 MCP 工具、拿原始 JSON，
+// 与 agent 工具层不同，这里用统一 MCP client.Call 调用 MCP 工具、拿原始 JSON，
 // 不触发 AskUser 权限弹窗（后台批量同步）。
 
 const (
@@ -44,7 +43,7 @@ func (s *Server) findMCPByName(name string) (*db.MCPServer, error) {
 
 // scopeSentryClient dials the configured ScopeSentry MCP (http transport). The env
 // map doubles as HTTP headers (X-API-Key). Callers must Close the client.
-func (s *Server) scopeSentryClient(ctx context.Context) (*mcphttp.Client, error) {
+func (s *Server) scopeSentryClient(ctx context.Context) (mcpClient, error) {
 	m, err := s.findMCPByName(scopeSentryMCPName)
 	if err != nil {
 		return nil, err
@@ -55,7 +54,7 @@ func (s *Server) scopeSentryClient(ctx context.Context) (*mcphttp.Client, error)
 	if m.URL == "" {
 		return nil, fmt.Errorf("数据源 %s 未配置 URL，请先配置", scopeSentryMCPName)
 	}
-	return mcphttp.New(ctx, m.Name, m.URL, jsonStrMap(m.Env), m.Insecure)
+	return connectMCP(ctx, m)
 }
 
 // envHasValue reports whether the env/header map has any non-empty value
@@ -102,7 +101,7 @@ func (s *Server) syncSSStatus(w http.ResponseWriter, r *http.Request) {
 	if configured && m.Enabled {
 		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 		defer cancel()
-		if cl, cerr := mcphttp.New(ctx, m.Name, m.URL, jsonStrMap(m.Env), m.Insecure); cerr == nil {
+		if cl, cerr := connectMCP(ctx, m); cerr == nil {
 			if _, terr := cl.Tools(ctx); terr == nil {
 				resp["reachable"] = true
 			}
@@ -364,7 +363,7 @@ func (s *Server) syncSSRun(w http.ResponseWriter, r *http.Request) {
 
 // ssProjectMeta fetches a project's display name and its target root domains
 // (get_project.target is a newline-separated list) for company + scope creation.
-func (s *Server) ssProjectMeta(ctx context.Context, cl *mcphttp.Client, projectID string) (name string, roots []string, err error) {
+func (s *Server) ssProjectMeta(ctx context.Context, cl mcpClient, projectID string) (name string, roots []string, err error) {
 	text, err := cl.Call(ctx, "get_project", map[string]any{"id": projectID})
 	if err != nil {
 		return "", nil, err
@@ -387,7 +386,7 @@ func (s *Server) ssProjectMeta(ctx context.Context, cl *mcphttp.Client, projectI
 // ssPageAll pages through list_assets for one asset_type + filter until a short/empty
 // page or the protection cap. The {list:[...]} envelope has no total, so we stop when
 // a page returns fewer than pageSize items.
-func (s *Server) ssPageAll(ctx context.Context, cl *mcphttp.Client, ssType string, filter map[string]any, pageSize int) (items []json.RawMessage, truncated bool, err error) {
+func (s *Server) ssPageAll(ctx context.Context, cl mcpClient, ssType string, filter map[string]any, pageSize int) (items []json.RawMessage, truncated bool, err error) {
 	for page := 1; ; page++ {
 		args := map[string]any{"asset_type": ssType, "pageIndex": page, "pageSize": pageSize}
 		if len(filter) > 0 {
