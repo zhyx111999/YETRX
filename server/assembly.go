@@ -20,7 +20,10 @@ import (
 func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
-		if err != nil || a == nil {
+		if err != nil {
+			return nil, agent.DeferredInfo{Err: fmt.Errorf("preset lookup failed: %w", err)}, nil
+		}
+		if a == nil {
 			return nil, agent.DeferredInfo{}, nil
 		}
 		var extra []actool.CoreTool

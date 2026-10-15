@@ -264,6 +264,17 @@ func (s *Session) Prompt(ctx context.Context, input string) iter.Seq2[harness.Ev
 				return
 			}
 			ev, eventErr := out.unpack(&s.refs)
+			// The cancel RPC can beat the child's deadline timer. Preserve the
+			// host's original cancellation category; referenced host errors keep
+			// their exact identity (including steering/quota sentinels).
+			if run.ctx.Err() != nil {
+				if out.Error != nil && out.Error.Ref == 0 && (out.Error.Code == "canceled" || out.Error.Code == "deadline") {
+					eventErr = run.ctx.Err()
+				}
+				if ev.Terminal != nil && out.TerminalError != nil && out.TerminalError.Ref == 0 && (out.TerminalError.Code == "canceled" || out.TerminalError.Code == "deadline") {
+					ev.Terminal.Err = run.ctx.Err()
+				}
+			}
 			if ev.Terminal != nil {
 				s.snapshot(ev.Terminal.Messages)
 			}

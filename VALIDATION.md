@@ -1,5 +1,19 @@
 # 验证记录
 
+## v0.2.5-yetrx.10：执行隔离、共享资源与响应边界
+
+2026-10-15，发布前组合验收使用受控 provider、真实子进程和独立 PostgreSQL，未调用真实模型或连接生产数据执行测试。
+
+- 六项范围均保留：全部会话循环隔离、沿用现有探索持久化、历史会话查询工具、全角色共享启用能力、默认分工引导、对话子代理禁止再次委派。主停止不取消后台；探索首次结果持久回传；复测等主对话处理关联证据后保存结论。
+- 回传边界为当前单次模型响应结束。真实流式和非流式测试验证：生成文字时不插卡、响应结束显示、工具结果之后下一请求读取；不取消/重跑工具，最后响应走自动跟进；显示/读取/确认分离，停止未读取结果保留、删除不复活。旧版本的整轮边界记录保留为历史。
+- `execution`、`agentexec`、`resourceexec` 的 Windows race 测试和 vet 通过；真实 Job 查询与双 runner 验证单树/聚合 CPU、内存、进程数限制，聚合内存和进程超额被拒绝，父网站不在预算 Job 内。异常退出、超大帧、EOF、nested RPC、取消及孙进程清理通过。
+- Linux 7.0 / cgroup v2 上使用独立 delegated systemd units 实测。race 二进制四组均 PASS、无 skip：execution 30、agentexec 42、resourceexec 20、server 39 条 PASS（含子测试）。验证 memory OOM SIGKILL、pids 拒绝、setsid 后代清理、单 runner 崩溃隔离、聚合节点数值和网站的兄弟 manager 节点；没有只以 Go runtime hint 声称硬限额。
+- 进程模式下实际重跑 Planner、Worker、MainAgent、goals 的共享工具调用与后续请求，以及后台回传、自动跟进、停止、删除、复测、HTTP SSE 首段显示/重连/唯一正文。MCP stdio/HTTP/SSE、自定义脚本/Python、目录/环境/默认值/CA/进度/错误/超时、Skill unlock、TodoStore、Resume、审批/hooks、预算/settlement、错误身份均有受控测试。
+- 组合回归发现取消直接终止子进程会抢在 transcript 落盘前退出；已改为先取消本轮并有界消费官方 iterator，再关闭进程。真实 transcript 重开验证已完成正文与取消工具结果配对保留；忽略取消的工具仍有硬终止。另修复 deadline 与 cancel RPC 竞争，保留宿主错误类别；Windows重复回归与 Linux组合回归通过。
+- 全部 DB race、聚焦 agent/server/workflow race、全仓编译与相关 vet 通过。历史查询覆盖中文/字面转义、稳定分页、字符预算与无损续读。Skill 全局开关持久化、重名处理、禁用过滤与旧绑定保留通过；前端生产 build 与类型检查通过。
+- 候选程序在独立目录、独立数据库和 loopback 端口完成默认隔离启动，实际健康版本 `.10-test`；启动输出确认单树及聚合限额并通过 worker 握手。发布的五平台构建由 GitHub Actions 完成；macOS 目前须显式关闭隔离使用原生路径。
+- 不声称真实模型吞吐、真实 WebSearch 服务或 Noa 实际模型压缩已实测。Linux/Windows限制与应用受控测试不等价于额外的文件系统/网络沙箱。
+
 ## v0.2.5-yetrx.8 / .9：会话逐步出字
 
 - 根因是 provider 已发送文字增量，但原 capture 只在连续片段完成时写活动，聊天页面再每 1–2 秒读取活动。新增请求级文字观察回调和认证 SSE 草稿，在生成过程中把已有原生事件送到原 Transcript；保留原聚合落盘、Markdown、气泡样式和工具记录，没有修改 Norma 或模型配置。

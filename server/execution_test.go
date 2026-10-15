@@ -64,6 +64,8 @@ func TestExecutionProcessKeepsSharedRolesAndResponseDelivery(t *testing.T) {
 	t.Run("stop", TestResponseBoundaryStopKeepsDisplayedResultAndFollowsUpWithoutRerunningTheTool)
 	t.Run("delete", TestResponseBoundaryDeletionMutesDisplayedResultsAndNeverRevives)
 	t.Run("retest", TestResponseBoundaryRetestDistinguishesDisplayedFromRead)
+	t.Run("stream", TestConversationStreamDeliversPartialTextAndReconnectsWithoutDuplicatingTheAnswer)
+	t.Run("stream-stop", TestConversationStreamCancellationRetainsPartialTextAndClearsTheDraft)
 }
 
 type executionFakeSession struct {

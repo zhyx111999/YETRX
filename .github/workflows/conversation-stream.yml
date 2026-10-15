@@ -57,8 +57,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test -race ./db -run '^(Test.*ConversationTask.*|TestCreateTaskWithSourceConversation.*|TestDeletedConversationDoesNotResurrectTaskResults|TestConversationHasPendingTasks|TestUpgradePromptDefault.*)$' -v -count=1 -timeout=180s | tee db-test.log
+          go test -race ./db -run '^(Test.*ConversationTask.*|TestCreateTaskWithSourceConversation.*|TestDeletedConversationDoesNotResurrectTaskResults|TestConversationHasPendingTasks|TestUpgradePromptDefault.*|TestChatSessions.*|TestChatSession.*|TestReadChatSession.*|TestChatHistoryQueries.*)$' -v -count=1 -timeout=180s | tee db-test.log
           go test -race ./workflow -v -count=1 -timeout=180s | tee workflow-test.log
           go test -race ./agent -run '^(TestCapture.*|TestChat.*|TestControlled.*|TestChild.*|TestMainConversation.*|TestParentWorkflow.*|Test.*Persona.*)$' -v -count=1 -timeout=180s | tee agent-test.log
-          go test -race ./server -run '^(TestBackground.*|TestConversationStop.*|TestConversationDeleteHTTP.*|TestChatStop.*|TestConversationStream.*|TestResponseBoundary.*|TestWorkflowDelivery.*|TestRetest.*|TestSpawnTask.*|TestNativeWorkflowUsesSharedResourcesAndQueuesDelivery|TestNativeWorkflowChatStopKeepsLateReplyAndStillRejectsCancelledStart|TestNativeHistoryImportPreservesLedgerAndRunsOnce)$' -v -count=1 -timeout=180s | tee server-test.log
+          go test -race ./server -run '^(TestBackground.*|TestConversationStop.*|TestConversationDeleteHTTP.*|TestChatStop.*|TestConversationStream.*|TestResponseBoundary.*|TestWorkflowDelivery.*|TestRetest.*|TestSpawnTask.*|TestNativeWorkflowUsesSharedResourcesAndQueuesDelivery|TestNativeWorkflowChatStopKeepsLateReplyAndStillRejectsCancelledStart|TestNativeHistoryImportPreservesLedgerAndRunsOnce|TestShared.*|TestChatHistory.*)$' -v -count=1 -timeout=180s | tee server-test.log
           ! grep -q -- '--- SKIP:' agent-test.log server-test.log db-test.log workflow-test.log

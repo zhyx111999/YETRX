@@ -274,7 +274,7 @@ func (w *worker) options(ctx context.Context, init initRequest) (agentcore.Optio
 		}
 	}
 	if init.Warn {
-		opts.OnWarn = func(text string) { w.must(ctx, "warn", rpcRequest{Text: text}) }
+		opts.OnWarn = func(text string) { w.must(w.context(), "warn", rpcRequest{Text: text}) }
 	}
 	if init.Reminder {
 		opts.SystemReminderFunc = func() string { return w.must(w.context(), "reminder", rpcRequest{}).Text }
