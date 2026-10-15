@@ -63,6 +63,7 @@ func newRetestServer(t *testing.T) (*Server, int64) {
 	agent.PromptOverride = func(string) (string, bool) { return agent.RetesterDefaultPrompt, true }
 	t.Cleanup(func() {
 		cancel()
+		s.taskDeliveryWG.Wait()
 		waitRetestIdle(t, s)
 		agent.ToolAugment, agent.ToolResolve, agent.PromptOverride = oldAugment, oldResolve, oldPrompt
 		_, _ = pg.Exec(`DELETE FROM conversations WHERE id IN (SELECT conversation_id FROM finding_retests WHERE finding_id=$1)`, fid)

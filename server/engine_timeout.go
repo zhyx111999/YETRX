@@ -59,7 +59,10 @@ func (e *Engine) beginTaskOperation(taskID string) bool {
 
 func (e *Engine) decInflight(taskID string) { atomic.AddInt64(e.inflightCounter(taskID), -1) }
 func (e *Engine) inflightCount(taskID string) int64 {
-	return atomic.LoadInt64(e.inflightCounter(taskID))
+	if value, ok := e.inflight.Load(taskID); ok {
+		return atomic.LoadInt64(value.(*int64))
+	}
+	return 0
 }
 
 // ---------- deadline ----------

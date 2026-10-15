@@ -624,6 +624,10 @@ func TestPendingConversationTaskResultsFiltersOrdersAndLimits(t *testing.T) {
 	if err != nil || len(limited) != 2 || limited[0] != all[0] || limited[1] != all[1] {
 		t.Fatalf("limit=2 -> %+v err=%v, want prefix of %+v", limited, err, all)
 	}
+	excluded, err := d.PendingConversationTaskResults(t.Context(), 1, all[0].TaskID, all[1].TaskID)
+	if err != nil || len(excluded) != 1 || excluded[0] != all[2] {
+		t.Fatalf("exclusion must apply before limit: %+v err=%v", excluded, err)
+	}
 	if def, err := d.PendingConversationTaskResults(t.Context(), 0); err != nil || len(def) == 0 {
 		t.Fatalf("limit=0 -> %+v err=%v, want default limit", def, err)
 	}

@@ -167,7 +167,9 @@ func TestWorkflowDeliveryWaitsForParentOutputAndFlushesImmediately(t *testing.T)
 	}
 }
 
-func TestWorkflowDeliveryQueuesOnlyItsOwnConversationAndStopKeepsAudit(t *testing.T) {
+// stopConversationWorkflows is the deletion path (the chat stop button does not
+// use it): it mutes automatic replies but keeps the queued audit.
+func TestWorkflowDeliveryQueuesOnlyItsOwnConversationAndDeletionStopKeepsAudit(t *testing.T) {
 	s, e, provider, first := newNativeWorkflowServer(t)
 	second, err := e.pg.CreateConversation("agent", "independent delivery", nil)
 	if err != nil {
@@ -197,13 +199,13 @@ func TestWorkflowDeliveryQueuesOnlyItsOwnConversationAndStopKeepsAudit(t *testin
 	waitNativeWorkflow(t, func() bool { s.chatMu.Lock(); defer s.chatMu.Unlock(); return !s.chatBusy[a] })
 	rows, _, err = e.pg.ConvActivityList(first.ID, 0, 100)
 	if err != nil || len(rows) != 1 || rows[0].Tool != "subagents" {
-		t.Fatalf("stop lost queued audit: %+v, %v", rows, err)
+		t.Fatalf("deletion stop lost queued audit: %+v, %v", rows, err)
 	}
 	provider.mu.Lock()
 	calls := provider.parentCalls
 	provider.mu.Unlock()
 	if calls != 1 {
-		t.Fatal("manual stop restarted the parent")
+		t.Fatal("muted conversation restarted the parent")
 	}
 }
 

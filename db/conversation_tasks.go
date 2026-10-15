@@ -56,7 +56,7 @@ type ConversationTaskResult struct {
 // PendingConversationTaskResults 返回尚未确认投递且已可投递的结果,按 created_at、task_id
 // 稳定排序,最多 limit 条(limit<=0 取默认 50)。已有 result_status 的链接直接可投递;
 // 其余仅当任务已终态、已归档或已删除(含 tasks 行缺失)时才返回,仍在运行的不返回。
-func (d *DB) PendingConversationTaskResults(ctx context.Context, limit int) ([]ConversationTaskResult, error) {
+func (d *DB) PendingConversationTaskResults(ctx context.Context, limit int, excludedTaskIDs ...int64) ([]ConversationTaskResult, error) {
 	if limit <= 0 {
 		limit = defaultConversationTaskResultLimit
 	}
@@ -73,9 +73,10 @@ SELECT ct.task_id, ct.conversation_id, ct.description, ct.goal,
 FROM conversation_tasks ct
 LEFT JOIN tasks t ON t.id = ct.task_id
 WHERE ct.delivered_at IS NULL
+  AND ct.task_id <> ALL(COALESCE($2::bigint[], ARRAY[]::bigint[]))
   AND (ct.result_status <> '' OR NOT `+conversationTaskLiveSQL+`)
 ORDER BY ct.created_at, ct.task_id
-LIMIT $1`, limit)
+LIMIT $1`, limit, excludedTaskIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ FROM conversation_tasks WHERE task_id=$1 AND conversation_id=$2 FOR UPDATE`, tas
 	if activityID.Valid {
 		return activityID.Int64, nil
 	}
-	id, err := insertConvActivityTx(ctx, tx, conversationID, a)
+	id, err := insertConvActivity(ctx, tx, conversationID, a)
 	if err != nil {
 		return 0, err
 	}
@@ -205,15 +206,4 @@ func insertConversationTask(tx *sql.Tx, taskID, conversationID int64, descriptio
 	_, err := tx.ExecContext(ctx, `INSERT INTO conversation_tasks(task_id, conversation_id, description, goal)
 VALUES ($1,$2,$3,$4)`, taskID, conversationID, description, goal)
 	return err
-}
-
-// insertConvActivityTx 是 AppendConvActivity 的事务版本,写全部字段(NodeID/Metadata 对会话记录无意义)。
-func insertConvActivityTx(ctx context.Context, tx *sql.Tx, convID int64, a Activity) (int64, error) {
-	var id int64
-	err := tx.QueryRowContext(ctx, `
-INSERT INTO conversation_activities(conversation_id, worker, kind, tool, tool_use_id, is_error, summary, detail, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
-VALUES ($1,NULLIF($2,''),NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),$9,$10,$11,$12)
-RETURNING id`, convID, utf8Clean(a.Worker), utf8Clean(a.Kind), utf8Clean(a.Tool), utf8Clean(a.ToolUseID), a.IsError,
-		utf8Clean(a.Summary), utf8Clean(a.Detail), a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens).Scan(&id)
-	return id, err
 }

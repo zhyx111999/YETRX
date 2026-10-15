@@ -118,6 +118,10 @@ func (s *Server) startWorkflow(ctx context.Context, input json.RawMessage) (acto
 		Tasks []workflow.Task `json:"tasks"`
 		workflow.Options
 	}
+	conversationID, _ := conversationSessionID(owner.Session)
+	if err := s.checkRetestDelegation(ctx, conversationID); err != nil {
+		return actool.Errorf(err.Error()), nil
+	}
 	if err = json.Unmarshal(input, &request); err != nil {
 		return actool.Errorf(err.Error()), nil
 	}

@@ -28,9 +28,11 @@ description: 用 subagents 为独立求证、审查或小范围修改编排子�
 - thread 用于同次运行内连续对话；相同 thread 的任务必须通过 depends_on 串行，并保持相同 canonical cwd。失败回合恢复前一 transcript，失败后缀另存审计。恢复整个工作流时，thread 任务重新执行，旧成功 thread 回合不作为可复用值。
 - agent_retries 默认 0，上限 3，表示额外次数。只重试可恢复错误，退避 250/500/1000ms；必须等待旧执行器退出。取消、配置错误、checkpoint 和额度暂停不作为普通重试。
 - agent_timeout_ms 默认 0，不额外设置硬超时；模式原有轮次和时间预算仍适用。超时/取消后给执行器 10 秒退出宽限；仍未退出时标记 draining、禁止重试和恢复，保留槽及工作树直到真正退出。
-- 子会话硬排除 subagents、subagents_control，包括延迟工具调用入口；服务端和调度器再次拒绝嵌套派发。
+- 子会话硬排除 subagents、subagents_control、spawn_task，包括延迟工具调用入口；服务端再次拒绝嵌套派发。需要追加工作时交回主对话，探索内部 Planner → Worker 调度不受影响。
 
 # 控制和恢复
+
+主聊天的停止只中断当前回复，子代理继续执行且完成后仍会回传。要停止指定运行，用 subagents_control stop；删除会话则停止其子代理并清理回传。通过主对话 spawn_task 创建的探索任务也会回传首次结果，使用 pause_task 或任务页面单独管理。
 
 启动立即返回 run_id；结束或暂停会自动回传。主对话忙碌时，子代理执行记录和结果先排队，在主对话本轮输出及工具执行全部结束后立即依序送入，无须用户再发消息。status 查看状态、尝试记录、源码目录、分支和检查点；read 明确提供 run_id 和 label，一次读取一个子代理，最多末尾 8000 字符。
 

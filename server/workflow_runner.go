@@ -26,7 +26,13 @@ func (s *Server) initWorkflows() {
 	if err := s.upgradeDelegationDescriptions(); err != nil {
 		log.Printf("[delegation] tool description upgrade: %v", err)
 	}
-	manager, err := workflow.New(s.ctx, filepath.Join(s.m.dir, "workflows"), workflow.DefaultConcurrency, s.runWorkflowTask, s.workflowCompleted)
+	s.workflowEpoch = time.Now()
+	ready := make(chan struct{})
+	defer close(ready)
+	manager, err := workflow.New(s.ctx, filepath.Join(s.m.dir, "workflows"), workflow.DefaultConcurrency, s.runWorkflowTask, func(run workflow.Run) {
+		<-ready // Startup interruption callbacks must see the assigned manager.
+		s.workflowCompleted(run)
+	})
 	if err != nil {
 		log.Printf("[workflow] init: %v", err)
 		return
@@ -115,11 +121,14 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 // WaitBackground lets the native runner finish cancellation before its stores
 // close. The caller's normal HTTP shutdown deadline bounds this wait.
 func (s *Server) WaitBackground(ctx context.Context) {
-	if s.workflows == nil {
-		return
-	}
 	done := make(chan struct{})
-	go func() { s.workflows.Wait(); close(done) }()
+	go func() {
+		if s.workflows != nil {
+			s.workflows.Wait()
+		}
+		s.taskDeliveryWG.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-ctx.Done():

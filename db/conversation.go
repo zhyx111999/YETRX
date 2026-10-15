@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"time"
 )
@@ -235,8 +236,15 @@ func (d *DB) DeleteConversations(ids []int64) ([]int64, error) {
 // execution step) and returns its id. Mirrors ExplorationStore.AppendActivity but
 // keyed by conversation_id. Reuses the Activity struct (NodeID is ignored here).
 func (d *DB) AppendConvActivity(convID int64, a Activity) (int64, error) {
+	return insertConvActivity(context.Background(), d.DB, convID, a)
+}
+
+// Both ordinary turns and durable background receipts write the same ledger.
+func insertConvActivity(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, convID int64, a Activity) (int64, error) {
 	var id int64
-	err := d.QueryRow(`
+	err := q.QueryRowContext(ctx, `
 INSERT INTO conversation_activities(conversation_id, worker, kind, tool, tool_use_id, is_error, summary, detail, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 VALUES ($1,NULLIF($2,''),NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),$9,$10,$11,$12)
 RETURNING id`, convID, utf8Clean(a.Worker), utf8Clean(a.Kind), utf8Clean(a.Tool), utf8Clean(a.ToolUseID), a.IsError,

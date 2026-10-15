@@ -11,6 +11,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -268,7 +269,12 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				PlanHeartbeatSeconds int             `json:"plan_heartbeat_seconds"`
 				SeedFirstIntent      bool            `json:"seed_first_intent"`
 			}
-			_ = json.Unmarshal(in, &a)
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if err := ctx.Err(); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
 			if strings.TrimSpace(a.Description) == "" {
 				a.Description = "未命名任务"
 			}
@@ -311,7 +317,15 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			if pin != nil {
 				llmIDs = []int64{*pin}
 			}
+			sourceConversationID := intercept.ConvIDFromContext(ctx)
+			if sourceConversationID == 0 {
+				sourceConversationID, _ = conversationSessionID(agent.RunInfoFrom(ctx).SessionID)
+			}
+			if err := s.checkRetestDelegation(ctx, sourceConversationID); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
 			t, err := s.m.CreateTaskWithOptions(a.Description, a.Goal, db.TaskCreateOptions{
+				SourceConversationID: sourceConversationID,
 				SourceTaskIDs:        sourceIDs,
 				LLMProfileIDs:        llmIDs,
 				TimeoutSeconds:       a.TimeoutSeconds,
@@ -330,7 +344,10 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			// seed + 后台可见地做目标分解(第0轮/LLM步骤/逐条goal) + engine.Run。
 			// seed_first_intent 默认 false(标准先规划再执行);简单任务可开启直接下发一 work 测试。
 			s.launchTask(t, a.Description+" "+a.Goal, a.SeedFirstIntent)
-			return actool.Text(fmt.Sprintf("task created: %s", t.ID)), nil
+			return jsonResult(map[string]any{
+				"task_id": t.ID, "background": true, "returns_to_conversation": sourceConversationID > 0,
+				"message": "探索长任务独立在后台运行。主聊天停止只中断当前回复；任务完成后向来源会话回传，主对话忙时排队。需单独暂停任务时使用 pause_task 或任务页面。",
+			})
 		})
 }
 

@@ -248,7 +248,7 @@ function Composer({
         {running ? (
           // while a run is in flight the send button becomes a stop button —
           // aborts just this session (the trigger queue keeps going).
-          <Button size="icon" variant="destructive" onClick={onStop} disabled={stopDisabled} title="停止本次运行">
+          <Button size="icon" variant="destructive" onClick={onStop} disabled={stopDisabled} title="停止当前回复，后台任务继续运行">
             <Square className="size-3.5 fill-current" />
           </Button>
         ) : (

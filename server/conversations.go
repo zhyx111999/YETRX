@@ -233,15 +233,26 @@ type conversationDeleteItem struct {
 	Error string `json:"error,omitempty"`
 }
 
-func (s *Server) cancelConversation(id int64) {
+// cancelConversationTurn aborts only the main-agent turn registered for the
+// conversation (a human turn or an automatic delivery turn). Background
+// subagents and queued deliveries are untouched.
+func (s *Server) cancelConversationTurn(id int64) bool {
 	busyKey := s.convBusyKey(id)
 	s.chatMu.Lock()
 	cancel := s.chatCancel[busyKey]
 	s.chatMu.Unlock()
-	if cancel != nil {
-		cancel(agent.AbortChatStoppedByUser)
+	if cancel == nil {
+		return false
 	}
+	cancel(agent.AbortChatStoppedByUser)
+	return true
+}
+
+// cancelConversation is the deletion path: besides the foreground turn it stops
+// every subagent run of the conversation and mutes queued automatic replies.
+func (s *Server) cancelConversation(id int64) {
 	s.stopConversationWorkflows(id)
+	s.cancelConversationTurn(id)
 }
 
 // pgDeleteConversationsBatch deletes up to 100 selected conversations in one
@@ -365,31 +376,20 @@ func (s *Server) pgConversationMsgDetail(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, 200, map[string]any{"detail": detail})
 }
 
-// pgStopConversation aborts the in-flight run for one conversation (manual stop —
-// the run/stop button in the chat UI). It cancels only THIS session's agent run;
-// the P3 trigger queue is untouched, so the agent's next queued fire still starts.
+// pgStopConversation is the chat stop button. It cancels only the current
+// foreground turn; background subagents keep running and queued results are
+// delivered after that turn ends. Use subagents_control stop for a background
+// run, and delete the conversation to stop all of its runs.
 func (s *Server) pgStopConversation(w http.ResponseWriter, r *http.Request) {
 	_, c, ok := s.convByID(w, r)
 	if !ok {
 		return
 	}
-	busyKey := s.convBusyKey(c.ID)
-	s.chatMu.Lock()
-	cancel := s.chatCancel[busyKey]
-	s.chatMu.Unlock()
-	if cancel != nil {
-		cancel(agent.AbortChatStoppedByUser)
+	status := "idle"
+	if s.cancelConversationTurn(c.ID) {
+		status = "stopping"
 	}
-	backgroundStopped := s.stopConversationWorkflows(c.ID)
-	if cancel == nil {
-		status := "idle"
-		if backgroundStopped {
-			status = "stopping"
-		}
-		writeJSON(w, 200, map[string]any{"status": status})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"status": "stopping"})
+	writeJSON(w, 200, map[string]any{"status": status})
 }
 
 // pgSendConversationMessage persists the human turn, then runs the agent in the
@@ -513,49 +513,26 @@ func (s *Server) conversationRunContext(id int64, busyKey string) (context.Conte
 func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelCauseFunc, c *db.Conversation, msg, busyKey string) {
 	defer func() {
 		cancel(agent.AbortChatTurnFinished)
-		s.finishConversationTurn(busyKey)
+		if receiptFrom(ctx) == nil {
+			s.finishConversationTurn(busyKey)
+		}
 	}()
-	// Only the first turn executes a historical retest. Follow-up conversation
-	// turns may explain the sealed result; the result tool refuses to overwrite it.
 	finishStatus, finishReason := "failed", "复测未能启动"
-	if c.AgentKey == db.FindingRetestAgentKey {
-		// Read without the run cancellation so an immediate stop still seals pending.
-		r, err := s.m.pg.FindingRetestForConversation(context.Background(), c.ID)
-		if err != nil {
-			// The sealing defer below needs r.ID, which we do not have here. Seal by
-			// conversation instead, otherwise the row stays 'pending' forever.
-			log.Printf("[conv %d] load retest: %v", c.ID, err)
-			if err := s.m.pg.FailPendingRetestForConversation(c.ID, "复测状态读取失败，请重新发起"); err != nil {
-				log.Printf("[conv %d] seal retest: %v", c.ID, err)
-			}
-			return
-		}
-		if r != nil && r.Status == "pending" {
-			defer func() {
-				if ctx.Err() != nil {
-					finishStatus, finishReason = "stopped", "复测已停止或服务已关闭"
-				}
-				s.finishRetest(r.ID, finishStatus, finishReason)
-			}()
-			if ctx.Err() != nil {
-				return
-			}
-			started, err := s.m.pg.StartFindingRetest(ctx, r.ID)
-			if err != nil {
-				finishReason = err.Error()
-				return
-			}
-			if !started {
-				return
-			}
-		}
+	finishRetest, proceed := s.beginRetestTurn(ctx, c)
+	if !proceed {
+		return
 	}
+	defer func() { finishRetest(finishStatus, finishReason) }()
 	if ctx.Err() != nil {
 		return
 	}
 	// precedence: the conversation agent's own binding → this conversation's pin → global.
 	if err := s.ensureNativeHistory(c.ID); err != nil {
-		_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true, Summary: "历史迁移失败", Detail: err.Error()})
+		if receiptFrom(ctx) == nil {
+			_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true, Summary: "历史迁移失败", Detail: err.Error()})
+		} else {
+			log.Printf("[conv %d] background history unavailable: %v", c.ID, err)
+		}
 		return
 	}
 	ca := s.resolveChatAgent(c)
@@ -581,16 +558,24 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	}
 	// On a manual stop ctx is cancelled; Chat already emits a clean "已手动停止"
 	// step, so skip the raw-error entry — only surface genuine failures.
+	receipt := receiptFrom(ctx)
+	if receipt != nil {
+		ctx = agent.WithChatControl(ctx, agent.ChatControl{OnPrompt: func() { receipt.started = true }})
+	}
 	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
 		finishReason = err.Error()
-		if ctx.Err() == nil {
+		if receipt != nil && !receipt.started {
+			log.Printf("[conv %d] background setup: %v", c.ID, err)
+		} else if ctx.Err() == nil {
 			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,
 				Summary: "（出错：" + err.Error() + "）", Detail: err.Error()})
 		}
 	} else {
 		finishStatus, finishReason = "completed", ""
 	}
-	_ = pg.TouchConversation(c.ID)
+	if receipt == nil || receipt.started {
+		_ = pg.TouchConversation(c.ID)
+	}
 }
 
 // triggerBehavior is an agent's cached P3 trigger post-processing策略 (see the

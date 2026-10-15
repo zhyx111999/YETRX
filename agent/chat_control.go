@@ -20,6 +20,8 @@ type ChatControl struct {
 	Child            bool
 	DrainMessages    func() []string
 	RollbackOnError  bool
+	// OnPrompt runs after setup succeeds, immediately before entering Prompt.
+	OnPrompt func()
 }
 type chatControlKey struct{}
 

@@ -76,9 +76,13 @@ type Server struct {
 	chatCancel  map[string]context.CancelCauseFunc
 	chatStreams map[int64]*conversationStream // active text/thinking drafts, protected by chatMu
 
-	workflows       *workflow.Manager
-	workflowPending map[string][]workflowDelivery // per-conversation FIFO, protected by chatMu
-	workflowMuted   map[string]bool               // manual stop suppresses queued automatic replies
+	workflows        *workflow.Manager
+	workflowPending  map[string][]workflowDelivery // per-conversation FIFO, protected by chatMu
+	workflowMuted    map[string]bool               // conversation removal suppresses automatic replies
+	taskDelivering   map[int64]bool                // durable exploration results already queued, protected by chatMu
+	taskDeliveryWG   sync.WaitGroup
+	workflowReported map[string]bool // consumed completion revisions, protected by chatMu
+	workflowEpoch    time.Time       // terminal results predating this process are historical
 
 	// triggerQ buffers P3 trigger fires PER AGENT. A per-agent "pump" launches runs up
 	// to a concurrency limit derived from the agent's策略: serial → limit 1 (+ optional
@@ -261,6 +265,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s.initWorkflows()
 	s.restoreTaskRuntimes()
+	s.startTaskDeliveryWorker()
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定

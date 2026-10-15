@@ -52,5 +52,7 @@ func (s *Server) workflowCompleted(run workflow.Run) {
 	s.queueWorkflowDelivery(run.OwnerSession, workflowDelivery{
 		Activity: db.Activity{Kind: "text", Tool: "subagents", Summary: "子代理状态更新", Detail: body},
 		Prompt:   prompt,
+		RunKey:   workflowResultKey(run),
+		Stopped:  run.Status == workflow.Stopped || run.Status == workflow.Interrupted,
 	})
 }

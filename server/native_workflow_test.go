@@ -247,28 +247,36 @@ func TestNativeWorkflowUsesSharedResourcesAndQueuesDelivery(t *testing.T) {
 	}
 }
 
-func TestNativeWorkflowStopSuppressesQueuedReplyAndCancelledStart(t *testing.T) {
-	s, _, provider, conv := newNativeWorkflowServer(t)
+// The chat stop button no longer mutes the conversation: a click on an idle
+// main turn is a no-op, so a result completing afterwards is still summarized.
+// A cancelled foreground prompt must however never start new background work.
+func TestNativeWorkflowChatStopKeepsLateReplyAndStillRejectsCancelledStart(t *testing.T) {
+	s, e, provider, conv := newNativeWorkflowServer(t)
 	session := s.convBusyKey(conv.ID)
-	s.stopConversationWorkflows(conv.ID)
+	if status := newConversationStopClient(t, s).stop(conv.ID); status != "idle" {
+		t.Fatalf("idle stop status = %q", status)
+	}
 	s.workflowCompleted(workflow.Run{ID: "fixture", OwnerSession: session, OwnerAgent: "agent", Status: workflow.Succeeded,
 		Tasks: []workflow.Task{{Label: "done", Status: workflow.Succeeded, Result: "late completion"}}})
 	waitNativeWorkflow(t, func() bool {
 		s.chatMu.Lock()
-		defer s.chatMu.Unlock()
-		return !s.chatBusy[session]
+		busy := s.chatBusy[session]
+		s.chatMu.Unlock()
+		provider.mu.Lock()
+		calls := provider.parentCalls
+		provider.mu.Unlock()
+		return !busy && calls == 1
 	})
-	s.chatMu.Lock()
-	pending, busy := len(s.workflowPending[session]), s.chatBusy[session]
-	s.chatMu.Unlock()
-	if pending != 0 || busy {
-		t.Fatal("stopped conversation restarted")
+	rows, _, err := e.pg.ConvActivityList(conv.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
 	}
-	provider.mu.Lock()
-	calls := provider.parentCalls
-	provider.mu.Unlock()
-	if calls != 0 {
-		t.Fatal("model called after stop")
+	summarized := false
+	for _, row := range rows {
+		summarized = summarized || strings.Contains(row.Summary, "NATIVE_PARENT_SUMMARY")
+	}
+	if !summarized {
+		t.Fatal("late result was not summarized after an idle stop")
 	}
 	ctx, cancel := context.WithCancel(agent.WithRunInfo(s.ctx, agent.RunInfo{SessionID: session}))
 	cancel()

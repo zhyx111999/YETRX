@@ -254,6 +254,9 @@ func (d *DB) FinishFindingRetest(id int64, status, reason string) error {
 }
 
 func (d *DB) RecoverFindingRetests() error {
-	_, err := d.Exec(`UPDATE finding_retests SET status='stopped', error='服务重启，复测已中断，请重新发起', finished_at=now() WHERE status IN ('pending','running')`)
+	_, err := d.Exec(`UPDATE finding_retests r SET status='stopped', error='服务重启，复测已中断，请重新发起', finished_at=now()
+		WHERE r.status IN ('pending','running') AND NOT EXISTS (
+			SELECT 1 FROM conversation_tasks ct WHERE ct.conversation_id=r.conversation_id AND ct.delivered_at IS NULL
+		)`)
 	return err
 }

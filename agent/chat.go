@@ -243,6 +243,9 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// re-unlock skill-gated MCPs from prior Skill() calls in the reloaded history so
 	// revealed tools stay callable across the fresh session.
 	seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
+	if control.OnPrompt != nil {
+		control.OnPrompt()
+	}
 	text, _, err := captureRunSession(ctx, captureSession, message, func(r db.Activity) {
 		if emit != nil {
 			r.Worker = agentKey

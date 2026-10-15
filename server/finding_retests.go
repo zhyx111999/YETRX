@@ -181,6 +181,16 @@ func (s *Server) findingRetestTools() []actool.CoreTool {
 				if err := json.Unmarshal(in, &a); err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
+				if caller, ok := ctx.Value(workflowCallerKey{}).(workflowCaller); agent.IsChildChat(ctx) || ok && caller.Depth > 0 {
+					return actool.Errorf("子代理只返回复测证据，由主对话核验并保存最终结论"), nil
+				}
+				pending, err := s.conversationHasBackground(ctx, intercept.ConvIDFromContext(ctx))
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				if pending {
+					return actool.Errorf("关联的后台工作或返回结果尚未处理完，请等待并核验证据后再保存复测结论"), nil
+				}
 				if err := s.m.pg.RecordFindingRetestResult(ctx, intercept.ConvIDFromContext(ctx), a.Verdict, a.Summary, a.Evidence); err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
@@ -198,6 +208,12 @@ func (s *Server) seedFindingRetester() error {
 		if err := s.m.pg.SeedTool(t.Name(), t.Description(), schema, bindings); err != nil {
 			return err
 		}
+	}
+	// This hash identifies the complete v0.2.5-yetrx.9 default. User-authored
+	// prompts retain their contents and versions.
+	if err := s.m.pg.UpgradePromptDefault(db.FindingRetestAgentKey,
+		"d08326aa9fbd9a1367e716cf7ef46533e9096e9a56493f77d364efbf696f7fe0", agent.RetesterDefaultPrompt); err != nil {
+		return err
 	}
 	const flag = "finding_retester_seed_v1"
 	tx, err := s.m.pg.Begin()
