@@ -108,9 +108,18 @@ Errors are explicit wire envelopes, including Terminal.Err. Host-produced errors
 retain session-owned references and recover the same error object on return to
 the host, preserving steering/quota errors.Is. Child-native errors carry text and
 cancellation/deadline categories. RPC errors remain explicit transport errors.
-Close waits only for the supervised process. An uncooperative host provider can
-leave its own callback goroutine pending until it cooperates; Close never joins
-that iterator. Uncooperative child tools are terminated by the supervisor.
+The factory context bounds initialization, not the accepted process lifetime.
+Prompt cancellation sends a worker run-cancel RPC outside the iterator mutex.
+The current SDK iterator is then consumed through completion using a fresh IPC
+context with a two-second cleanup window. Early consumer exit uses the same
+cancel/drain path. Only Norma records assistant/tool history; streaming aborts
+retain the SDK's original semantics. Host callbacks retain Prompt identity,
+deadline and cancellation, and canceled rounds cannot open another model request.
+Close cancels the active round and allows the same bounded drain before handing
+process termination to the supervisor. It never joins an uncooperative host
+provider or tool; those callbacks can remain pending until they cooperate.
+After transport loss the worker bounds its own iterator cleanup; the supervisor
+still owns process-tree termination and its hard-kill fallback.
 
 ## Options and limits
 
@@ -152,3 +161,13 @@ ARTEX_CONFIG=C:/nonexistent-agentexec-test-config ARTEX_PG_DSN= CGO_ENABLED=1 go
 Both passed. The copied `execution/` is removed before commit and is not part of
 this module's changes. Re-run after merging the supervisor and server/resource
 integration; this branch alone intentionally does not build without `execution`.
+
+Cancellation regression tests also cover completed text plus a held tool, stop,
+early consumer exit, concurrent Close, uncooperative host/child tools, real
+transcript Resume, in-stream parity with native Norma, and canceled factory init.
+Linux tests require a delegated cgroup and call `execution.InitCgroup` in TestMain.
+For example, with a working systemd user manager:
+
+```sh
+go test -race -exec 'systemd-run --user --quiet --wait --pipe -p Delegate=yes' ./agentexec
+```

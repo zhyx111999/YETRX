@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/execution"
@@ -54,6 +55,9 @@ func NewFactory(config Config) agent.SessionFactory {
 		config.Env = append([]string{}, config.Env...)
 	}
 	return func(ctx context.Context, opts agentcore.Options) (agent.RuntimeSession, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		local := config.LocalTool
 		if local == nil {
 			local = SDKLocalTool
@@ -87,11 +91,18 @@ func NewFactory(config Config) agent.SessionFactory {
 			}
 		}
 		s := &Session{opts: opts, tools: tools, ctx: ctx, streams: map[string]*modelStream{}, callbacks: make(chan hostCallback), observer: config.OnLocalToolStart}
-		s.process, err = execution.Start(ctx, exe, args, config.Env, config.Limits, s.handle)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s.process, err = execution.Start(context.WithoutCancel(ctx), exe, args, config.Env, config.Limits, s.handle)
 		if err != nil {
 			return nil, err
 		}
 		if err = s.call(ctx, "init", init, nil); err != nil {
+			s.Close()
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			s.Close()
 			return nil, err
 		}
@@ -100,7 +111,8 @@ func NewFactory(config Config) agent.SessionFactory {
 }
 
 // Session allows concurrent Messages/Close. Prompt and Resume are exclusive.
-// Any transport failure or early consumer exit ends the process; no fallback.
+// Cancellation drains the official iterator before releasing the operation slot.
+// Transport failures end the process; there is no in-process fallback.
 type Session struct {
 	process    *execution.Process
 	opts       agentcore.Options
@@ -114,6 +126,7 @@ type Session struct {
 	nextStream uint64
 	callbacks  chan hostCallback
 	observer   func(context.Context, tool.CoreTool)
+	active     *promptRun
 	closing    bool
 	closeOnce  sync.Once
 	closeErr   error
@@ -150,12 +163,22 @@ func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closing = true
+		active := s.active
+		if active != nil {
+			active.cancel()
+		}
 		streams := make([]*modelStream, 0, len(s.streams))
 		for _, stream := range s.streams {
 			streams = append(streams, stream)
 			stream.cancel()
 		}
 		s.mu.Unlock()
+		if active != nil {
+			select {
+			case <-active.done:
+			case <-time.After(cleanupTimeout):
+			}
+		}
 		s.closeErr = s.process.Close()
 		// A provider may ignore cancellation. Never join its coroutine on Close.
 		for _, stream := range streams {
@@ -168,7 +191,7 @@ func (s *Session) Resume(id string) error {
 	s.op.Lock()
 	defer s.op.Unlock()
 	var out eventReply
-	if err := s.call(s.currentContext(), "resume", id, &out); err != nil {
+	if err := s.call(context.WithoutCancel(s.currentContext()), "resume", id, &out); err != nil {
 		return err
 	}
 	s.snapshot(out.Messages)
@@ -181,40 +204,58 @@ func (s *Session) Resume(id string) error {
 }
 func (s *Session) Prompt(ctx context.Context, input string) iter.Seq2[harness.Event, error] {
 	s.op.Lock()
+	run := newPromptRun(ctx)
 	s.mu.Lock()
-	s.ctx = ctx
+	s.ctx, s.active = run.ctx, run
+	closed := s.closing
 	s.mu.Unlock()
+	if closed {
+		run.cancel()
+	}
+	go run.watch(s.process.Peer)
 	unlocked := []string(nil)
 	if s.opts.UnlockSet != nil {
 		unlocked = s.opts.UnlockSet.List()
 	}
 	var accepted eventReply
-	err := s.call(ctx, "prompt", struct {
-		Input    string
-		Unlocked []string
-	}{input, unlocked}, &accepted)
+	err := run.ctx.Err()
+	if err == nil {
+		err = s.call(run.transport, "prompt", struct {
+			Input    string
+			Unlocked []string
+			Deadline time.Time
+		}{input, unlocked, deadline(ctx)}, &accepted)
+	}
+	close(run.accepted)
 	if err == nil {
 		err = s.refs.decode(accepted.Error)
 		s.snapshot(accepted.Messages)
 	}
-	// Prompt has already accepted the message when it returns, matching SDK
-	// semantics required by ChatControl.OnPrompt.
+	// Acceptance and the transcript append precede ChatControl.OnPrompt.
 	return func(yield func(harness.Event, error) bool) {
-		defer s.op.Unlock()
 		finished := false
 		defer func() {
+			if !finished && err == nil {
+				run.cancel()
+				finished = s.drain(run)
+			}
+			run.finish()
+			s.mu.Lock()
+			s.active = nil
+			s.mu.Unlock()
+			s.op.Unlock()
 			if !finished {
 				_ = s.Close()
 			}
 		}()
 		if err != nil {
-			yield(harness.Event{}, err)
+			yield(harness.Event{}, run.failure(err))
 			return
 		}
 		for {
 			var out eventReply
-			if err := s.call(ctx, "next", nil, &out); err != nil {
-				yield(harness.Event{}, err)
+			if err = s.call(run.transport, "next", nil, &out); err != nil {
+				yield(harness.Event{}, run.failure(err))
 				return
 			}
 			if !out.More {
@@ -222,11 +263,11 @@ func (s *Session) Prompt(ctx context.Context, input string) iter.Seq2[harness.Ev
 				finished = true
 				return
 			}
-			ev, err := out.unpack(&s.refs)
+			ev, eventErr := out.unpack(&s.refs)
 			if ev.Terminal != nil {
 				s.snapshot(ev.Terminal.Messages)
 			}
-			if !yield(ev, err) {
+			if !yield(ev, eventErr) {
 				return
 			}
 		}

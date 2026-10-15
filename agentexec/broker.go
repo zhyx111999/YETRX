@@ -55,6 +55,9 @@ func (s *Session) dispatch(rpc context.Context, method string, raw json.RawMessa
 	case "snapshot":
 		s.snapshot(in.Messages)
 	case "model.open":
+		if err := ctx.Err(); err != nil {
+			return marshal(rpcReply{Error: s.refs.encode(err)})
+		}
 		// Stream lifetime spans next calls, so it must not inherit this RPC's
 		// short-lived handler context. Cancellation still follows host Prompt.
 		streamCtx, cancel := context.WithCancel(s.currentContext())
@@ -104,6 +107,9 @@ func (s *Session) dispatch(rpc context.Context, method string, raw json.RawMessa
 		}
 		m.mu.Unlock()
 	case "model.complete":
+		if err := ctx.Err(); err != nil {
+			return marshal(rpcReply{Error: s.refs.encode(err)})
+		}
 		complete := s.opts.Deps.CallModelSync
 		if in.Provider || complete == nil {
 			complete = s.opts.Provider.Complete

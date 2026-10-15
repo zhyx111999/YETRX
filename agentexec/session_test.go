@@ -54,7 +54,7 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("YETRX_EXECUTION_LINUX_TEST") == "1" {
 		if err := execution.InitCgroup(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, "agentexec tests require a delegated cgroup:", err)
 			os.Exit(2)
 		}
 	}

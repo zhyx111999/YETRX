@@ -8,6 +8,7 @@ import (
 	"iter"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/Autumn-27/artex/execution"
 	"github.com/Autumn-27/norma/agentcore"
@@ -43,15 +44,25 @@ func Serve(ctx context.Context, r io.ReadCloser, w io.WriteCloser, config Worker
 		worker.cancel()
 	}
 	worker.mu.Unlock()
-	// Wait for an outstanding next call to unwind before touching the iterator.
-	worker.op.Lock()
-	defer worker.op.Unlock()
-	if worker.stop != nil {
-		worker.stop()
+	// After transport loss, let the executable exit even if a local tool
+	// ignores cancellation. The supervisor still reaps the entire process tree.
+	cleaned := make(chan struct{})
+	go func() {
+		defer close(cleaned)
+		worker.op.Lock()
+		defer worker.op.Unlock()
+		if worker.stop != nil {
+			worker.stop()
+		}
+		if worker.session != nil {
+			_ = worker.session.Close()
+		}
+	}()
+	select {
+	case <-cleaned:
+	case <-time.After(100 * time.Millisecond):
 	}
-	if worker.session != nil {
-		_ = worker.session.Close()
-	}
+
 	if errors.Is(worker.peer.Err(), io.EOF) || errors.Is(worker.peer.Err(), execution.ErrClosed) {
 		return nil
 	}
@@ -83,6 +94,9 @@ func (w *worker) fail(err error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.ctx != nil && w.ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return
+	}
 	if w.fatal == nil {
 		w.fatal = err
 	}
@@ -113,6 +127,14 @@ func (w *worker) must(ctx context.Context, method string, in rpcRequest) rpcRepl
 }
 func (w *worker) handle(ctx context.Context, method string, raw json.RawMessage, _ func(json.RawMessage) error) (json.RawMessage, error) {
 	<-w.ready
+	if method == "cancel" {
+		w.mu.Lock()
+		if w.cancel != nil {
+			w.cancel()
+		}
+		w.mu.Unlock()
+		return marshal(rpcReply{})
+	}
 	w.op.Lock()
 	defer w.op.Unlock()
 	switch method {
@@ -153,6 +175,7 @@ func (w *worker) handle(ctx context.Context, method string, raw json.RawMessage,
 		var in struct {
 			Input    string
 			Unlocked []string
+			Deadline time.Time
 		}
 		if err := json.Unmarshal(raw, &in); err != nil {
 			return nil, err
@@ -161,6 +184,10 @@ func (w *worker) handle(ctx context.Context, method string, raw json.RawMessage,
 			w.unlock.Add(in.Unlocked...)
 		}
 		run, cancel := context.WithCancel(w.base)
+		if !in.Deadline.IsZero() {
+			cancel()
+			run, cancel = context.WithDeadline(w.base, in.Deadline)
+		}
 		w.mu.Lock()
 		w.ctx, w.cancel, w.fatal = run, cancel, nil
 		w.mu.Unlock()
@@ -183,9 +210,8 @@ func (w *worker) handle(ctx context.Context, method string, raw json.RawMessage,
 		w.mu.Lock()
 		fatal := w.fatal
 		w.mu.Unlock()
-		if fatal != nil {
+		if fatal != nil && more {
 			err = fatal
-			more = true
 		}
 		out := packEvent(ev, err, more)
 		if !more {
