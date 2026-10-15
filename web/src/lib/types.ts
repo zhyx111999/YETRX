@@ -1141,16 +1141,12 @@ export interface Agent {
   llm_profile_id?: number | null; // 绑定的 LLM 配置；null/absent = 跟随任务/会话/全局
   max_turns?: number; // 0 = 无限制
   run_seconds?: number; // worker 单次运行墙钟上限(秒)；0 = 无限制
-  web_search?: boolean; // 是否启用网络搜索(受系统全局开关门控)
+  web_search?: boolean; // 历史字段：网络搜索现由系统全局开关统一控制，UI 不再读写
   interactive_shell?: boolean; // 是否启用交互式 shell(持久 PTY 会话工具族)
   // P3 触发后处理策略(仅自定义 agent 有意义)
   trigger_run_mode?: "serial" | "parallel"; // 串行排队 / 每次触发各自并发一个会话
   trigger_merge_mode?: "by_task" | "all" | "none"; // 仅 serial：同任务合并 / 全部合并 / 不合并
   trigger_max_parallel?: number; // 仅 parallel：每 agent 并发上限；0=不限
-  // 绑定数量(仅列表接口返回)：可见 MCP / 可见 Skill / 绑定工具
-  mcp_count?: number;
-  skill_count?: number;
-  tool_count?: number;
 }
 
 export interface PromptVar {
@@ -1172,7 +1168,6 @@ export interface AgentDetail {
   prompt: string;
   variables: PromptVar[];
   versions: PromptVersion[];
-  visibility: { mcp: number[]; skill: string[] };
   // 可绑定的 LLM 配置候选(供「默认模型」下拉)；当前绑定见 agent.llm_profile_id
   llm_profiles?: { id: number; name: string; model: string; is_default: boolean }[];
   wrapup_prompt?: string; // 已保存的收尾提示词(空=用内置默认)
@@ -1221,7 +1216,11 @@ export interface SkillItem {
   tasks: number; // 加载过它的任务数（chat 会话不计入）
   usage_agents: string[]; // 加载过它的 agent key
   last_used?: string;
+  // 全局启用开关（所有 Agent 共享）。旧后端不返回该字段，缺省视为 true；判断请用 isSkillEnabled。
+  enabled?: boolean;
 }
+
+export const isSkillEnabled = (s: Pick<SkillItem, "enabled">): boolean => s.enabled !== false;
 
 // SkillCall 是一次 Skill() 调用（单个 skill 的最近调用列表）。
 export interface SkillCall {
@@ -1243,14 +1242,15 @@ export interface MissingSkill {
 // ---- Tools (内置工具目录) ----
 // key + handler live in Go; only these fields are page-editable. system tools lock
 // the key and the parameter *structure* (name/type/required) — the per-param
-// description/default and the agent binding are what move.
+// description/default and the enabled switch are what move. 启用的工具全局共享；
+// agents 为历史绑定数据，UI 不再编辑，保存时按原值回传。
 export interface Tool {
   key: string;
   system: boolean;
   description: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   schema: Record<string, any>; // full JSON-Schema (object with properties)
-  agents: string[]; // bound agent keys
+  agents: string[]; // 历史绑定的 agent key（不再生效，保存时原样回传）
   enabled: boolean;
   kind?: "builtin" | "shell" | "command" | "script" | "http"; // 自定义工具类型
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

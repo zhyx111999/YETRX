@@ -1097,7 +1097,6 @@ export const api = {
       llm_profile_id?: number | null; // number=绑定；null=解绑(跟随任务/全局)；缺省=不动
       max_turns?: number;
       run_seconds?: number;
-      web_search?: boolean;
       interactive_shell?: boolean;
       trigger_run_mode?: "serial" | "parallel";
       trigger_merge_mode?: "by_task" | "all" | "none";
@@ -1110,9 +1109,6 @@ export const api = {
     get<{ variables: PromptVar[] }>(`/agents/${key}/variables`).then((r) => arr(r.variables)),
   previewAgentPrompt: (key: string, template: string, sample?: Record<string, string>) =>
     post<{ rendered: string; error?: string }>(`/agents/${key}/prompt/preview`, { template, sample }),
-  getAgentVisibility: (key: string) => get<{ mcp: number[]; skill: string[] }>(`/agents/${key}/visibility`),
-  setAgentVisibility: (key: string, mcp: number[], skill: string[]) =>
-    put<{ ok: boolean }>(`/agents/${key}/visibility`, { mcp, skill }),
 
   // ---- tools (内置工具目录) ----
   tools: () => get<{ tools: Tool[] }>("/tools").then((r) => arr(r.tools)),
@@ -1195,6 +1191,9 @@ export const api = {
     return body;
   },
   deleteSkill: (name: string) => del<{ deleted: string }>(`/skills/${name}`),
+  // 全局启用开关（所有 Agent 共享）。返回后端落库后的实际值，调用方以此为准。
+  setSkillEnabled: (name: string, enabled: boolean) =>
+    put<{ enabled: boolean }>(`/skills/${name}/enabled`, { enabled }),
   updateSkillMeta: (
     name: string,
     meta: { mcps?: string[]; description?: string; license?: string; compatibility?: string },
@@ -1210,17 +1209,6 @@ export const api = {
     get<{ calls: SkillCall[] }>(`/skills/${name}/usage?limit=${limit}`).then((r) => arr(r.calls)),
   missingSkills: (limit = 20) =>
     get<{ missing: MissingSkill[] }>(`/skills/missing?limit=${limit}`).then((r) => arr(r.missing)),
-
-  // ---- visibility (MCP resource side) ---- (agent ids are strings per spec)
-  resourceVisibility: (kind: string, id: number) =>
-    get<{ agents: string[] }>(`/visibility/${kind}/${id}`).then((r) => arr(r.agents)),
-  toggleVisibility: (agentId: string, kind: string, resourceId: number, visible: boolean) =>
-    post<{ ok: boolean }>("/visibility/toggle", { agent_id: agentId, kind, resource_id: resourceId, visible }),
-
-  // ---- visibility (Skill，按名称) ----
-  skillVisibility: (name: string) => get<{ agents: string[] }>(`/visibility/skill/${name}`).then((r) => arr(r.agents)),
-  toggleSkillVisibility: (agentId: string, skillName: string, visible: boolean) =>
-    post<{ ok: boolean }>("/visibility/skill/toggle", { agent_id: agentId, skill_name: skillName, visible }),
 
   // ---- intercept rules ----
   interceptRules: () => get<{ rules: InterceptRule[] }>("/intercept/rules").then((r) => arr(r.rules)),

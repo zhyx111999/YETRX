@@ -2283,7 +2283,6 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (seg[0] === "agents" && seg[2] === "variables") return { variables: D.agentDetail(seg[1]).variables };
   if (seg[0] === "agents" && seg[2] === "prompt" && seg[3] === "preview")
     return { rendered: String(b.template ?? "").replace(/\{\{\.(\w+)\}\}/g, "«$1»") };
-  if (seg[0] === "agents" && seg[2] === "visibility" && m === "GET") return D.agentDetail(seg[1]).visibility;
 
   // ── conversations ──
   if (path === "/conversations" && m === "GET") {
@@ -2390,12 +2389,15 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/skills/missing") return { missing: D.missingSkills };
   if (seg[0] === "skills" && seg[2] === "usage") return { calls: D.skillCalls };
   if (path === "/skills" && m === "POST") return { name: String(b.name ?? "new-skill") };
+  if (seg[0] === "skills" && seg[2] === "enabled" && m === "PUT") {
+    const skill = D.skills.find((x) => x.name === seg[1]);
+    if (!skill) throw new Error("skill 不存在");
+    skill.enabled = b.enabled === true;
+    return { enabled: skill.enabled };
+  }
   if (seg[0] === "skills" && seg[2] === "files" && seg.length === 3) return { files: ["SKILL.md"] };
   if (seg[0] === "skills" && seg[2] === "files" && seg.length >= 4)
     return { content: "# SKILL.md\n\n（demo）这是该 skill 的说明文件示例。", file: seg.slice(3).join("/") };
-
-  // ── visibility ──
-  if (seg[0] === "visibility" && m === "GET") return { agents: [] };
 
   // ── intercept ──
   if (path === "/intercept/rules" && m === "GET") return { rules: D.interceptRules };

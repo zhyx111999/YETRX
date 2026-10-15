@@ -86,11 +86,6 @@ function AgentGridCard({
         <p className="text-muted-foreground line-clamp-2 min-h-8 text-xs">
           {agent.description || "（无描述）"}
         </p>
-        <div className="text-muted-foreground flex flex-wrap gap-1.5 text-[10px]">
-          <span className="rounded border px-1.5 py-0.5">MCP {agent.mcp_count ?? 0}</span>
-          <span className="rounded border px-1.5 py-0.5">Skill {agent.skill_count ?? 0}</span>
-          <span className="rounded border px-1.5 py-0.5">工具 {agent.tool_count ?? 0}</span>
-        </div>
       </button>
       {!agent.builtin && (
         <AlertDialog>
@@ -107,7 +102,7 @@ function AgentGridCard({
             <AlertDialogHeader>
               <AlertDialogTitle>删除 Agent「{agent.name}」？</AlertDialogTitle>
               <AlertDialogDescription>
-                将一并删除它的提示词、变量、可见性与工具绑定。此操作不可撤销。
+                将一并删除它的提示词与变量。此操作不可撤销。
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -271,7 +266,7 @@ export default function AgentsPage() {
                     </Badge>
                   )}
                 </SheetTitle>
-                <SheetDescription>{editing.description || "提示词、配置、可见资源与工具绑定"}</SheetDescription>
+                <SheetDescription>{editing.description || "提示词、模型与运行配置"}</SheetDescription>
               </SheetHeader>
               <AgentEditor agentKey={editing.key} onSaved={reload} />
             </>

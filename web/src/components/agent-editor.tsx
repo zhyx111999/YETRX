@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { EyeIcon, GitCompareIcon, InfoIcon, PencilIcon, RotateCcwIcon, SaveIcon, Trash2Icon, XIcon } from "lucide-react";
 
@@ -26,36 +27,27 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Markdown } from "@/components/markdown";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentDetail, AgentTrigger, MCPServer, PromptVar, PromptVersion, Settings, SkillItem, Tool } from "@/lib/types";
-
-// Traffic tools are host tools gated by the global 流量捕获 switch: bindable, but
-// only usable when capture is on. Keep this list in sync with traffic.SeedToolMetas.
-const TRAFFIC_TOOL_KEYS = new Set(["traffic_search", "traffic_get"]);
+import type { Agent, AgentDetail, AgentTrigger, PromptVar, PromptVersion, Tool } from "@/lib/types";
 
 // AgentEditor is the tabbed editor for one agent, used inside the agents-page
-// drawer (and reused full-page for deep links). Tabs: 配置与提示词 / MCP / Skill /
-// Tools. Config + prompt save as before; visibility + tool bindings toggle live.
+// drawer (and reused full-page for deep links). Tabs: 配置与提示词 / 收尾提示词 /
+// 共享资源(仅说明) / 触发。工具、MCP、Skill 已全局共享，不再按 Agent 绑定；
+// 这里只保存提示词、模型、预算(运行配置)等 Agent 自身设定。
 export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?: () => void }) {
   const [detail, setDetail] = React.useState<AgentDetail | null>(null);
   const [versions, setVersions] = React.useState<PromptVersion[]>([]);
   const [variables, setVariables] = React.useState<PromptVar[]>([]);
-  const [mcp, setMcp] = React.useState<MCPServer[]>([]);
-  const [skills, setSkills] = React.useState<SkillItem[]>([]);
-  const [tools, setTools] = React.useState<Tool[]>([]);
   const [loaded, setLoaded] = React.useState(false);
   const [viewVer, setViewVer] = React.useState<PromptVersion | null>(null);
   const [diffVer, setDiffVer] = React.useState<PromptVersion | null>(null);
 
   const [prompt, setPrompt] = React.useState("");
-  const [mcpVisible, setMcpVisible] = React.useState<number[]>([]);
-  const [skillVisible, setSkillVisible] = React.useState<string[]>([]);
   const [preview, setPreview] = React.useState("");
   const [maxTurns, setMaxTurns] = React.useState("0");
   const [runSecs, setRunSecs] = React.useState("600");
   // "" = 跟随(未绑定)；否则为 profile id 字符串
   const [llmProfileId, setLlmProfileId] = React.useState("");
   const [llmProfiles, setLlmProfiles] = React.useState<NonNullable<AgentDetail["llm_profiles"]>>([]);
-  const [webSearch, setWebSearch] = React.useState(false);
   const [interactiveShell, setInteractiveShell] = React.useState(false);
   const [wrapup, setWrapup] = React.useState("");
   const [wrapupDefault, setWrapupDefault] = React.useState("");
@@ -67,17 +59,6 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const [ttWrapupDefault, setTtWrapupDefault] = React.useState("");
   const [ttTurns, setTtTurns] = React.useState("0");
   const [ttTurnsDefault, setTtTurnsDefault] = React.useState(5);
-  const [settings, setSettings] = React.useState<Settings | null>(null);
-
-  React.useEffect(() => {
-    api.mcpServers().then(setMcp).catch(() => {});
-    api.skills().then(setSkills).catch(() => {});
-    api.tools().then(setTools).catch(() => {});
-    api.settings().then(setSettings).catch(() => {});
-  }, []);
-  // global gates: traffic tools need 流量捕获, web search needs the master switch.
-  const captureOn = !!settings?.traffic_capture;
-  const webSearchGlobalOn = !!settings?.web_search_enabled;
 
   const reload = React.useCallback(() => {
     api
@@ -87,13 +68,10 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         setPrompt(d.prompt ?? "");
         setVariables(d.variables ?? []);
         setVersions(d.versions ?? []);
-        setMcpVisible(d.visibility?.mcp ?? []);
-        setSkillVisible(d.visibility?.skill ?? []);
         setMaxTurns(String(d.agent?.max_turns ?? 0));
         setRunSecs(String(d.agent?.run_seconds ?? 600));
         setLlmProfileId(d.agent?.llm_profile_id != null ? String(d.agent.llm_profile_id) : "");
         setLlmProfiles(d.llm_profiles ?? []);
-        setWebSearch(!!d.agent?.web_search);
         setInteractiveShell(!!d.agent?.interactive_shell);
         setWrapup(d.wrapup_prompt ?? "");
         setWrapupDefault(d.wrapup_default ?? "");
@@ -187,7 +165,6 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         patch.max_turns = Math.max(0, Math.floor(Number(maxTurns) || 0));
         patch.run_seconds = Math.max(0, Math.floor(Number(runSecs) || 0));
       }
-      if (showWebSearch) patch.web_search = webSearch;
       if (showInteractiveShell) patch.interactive_shell = interactiveShell;
       await api.saveAgentConfig(agentKey, patch);
       toast.success("已保存运行配置（立即生效）");
@@ -196,70 +173,12 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
       toast.error("保存失败：" + (e as Error).message);
     }
   }
-  // applyVis optimistically updates, persists, and toasts success/failure. On
-  // failure it reverts to the prior selection so the UI never lies about state.
-  async function applyVis(nextMcp: number[], nextSkill: string[], okMsg: string) {
-    const prevMcp = mcpVisible;
-    const prevSkill = skillVisible;
-    setMcpVisible(nextMcp);
-    setSkillVisible(nextSkill);
-    try {
-      await api.setAgentVisibility(agentKey, nextMcp, nextSkill);
-      toast.success(okMsg);
-      onSaved?.(); // refresh the list so the card's MCP/Skill counts stay in sync
-    } catch (e) {
-      setMcpVisible(prevMcp);
-      setSkillVisible(prevSkill);
-      toast.error("保存失败：" + (e as Error).message);
-    }
-  }
-  function toggleMcp(id: number) {
-    const on = mcpVisible.includes(id);
-    const name = mcp.find((m) => m.id === id)?.name ?? String(id);
-    applyVis(
-      on ? mcpVisible.filter((x) => x !== id) : [...mcpVisible, id],
-      skillVisible,
-      `${on ? "已取消" : "已开启"} MCP「${name}」可见`,
-    );
-  }
-  function toggleSkill(name: string) {
-    const on = skillVisible.includes(name);
-    applyVis(
-      mcpVisible,
-      on ? skillVisible.filter((x) => x !== name) : [...skillVisible, name],
-      `${on ? "已取消" : "已开启"} Skill「${name}」可见`,
-    );
-  }
-  async function toggleTool(t: Tool) {
-    const on = t.agents.includes(agentKey);
-    const nextAgents = on ? t.agents.filter((k) => k !== agentKey) : [...t.agents, agentKey];
-    // optimistic update
-    setTools((ts) => ts.map((x) => (x.key === t.key ? { ...x, agents: nextAgents } : x)));
-    try {
-      await api.saveTool(t.key, {
-        description: t.description,
-        schema: t.schema,
-        agents: nextAgents,
-        enabled: t.enabled,
-      });
-      toast.success(`${on ? "已解绑" : "已绑定"}工具「${t.key}」`);
-      onSaved?.(); // refresh the list so the card's 工具 count stays in sync
-    } catch (e) {
-      toast.error("保存工具绑定失败：" + (e as Error).message);
-      reload();
-      api.tools().then(setTools).catch(() => {});
-    }
-  }
-
   if (loaded && !detail) {
     return <div className="text-muted-foreground p-6 text-center text-sm">未找到 Agent：{agentKey}</div>;
   }
   // config is meaningless for the conversational main agent and the fixed-budget
   // goals decomposer; every other agent (workers, custom assistants) honors it.
   const showConfig = agentKey !== "mainagent" && agentKey !== "goals";
-  // web search applies to every conversational/executing agent except the one-shot
-  // goals decomposer; it's gated by the global master switch.
-  const showWebSearch = agentKey !== "goals";
   // interactive shell (持久 PTY 会话工具族) 同样对除 goals 外的 agent 开放;无全局门控。
   const showInteractiveShell = agentKey !== "goals";
   // 每个 agent(含 goals/mainagent)都跑在某个 LLM 上,故「默认模型」绑定对所有 agent 开放。
@@ -272,16 +191,14 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
       <TabsList className="mx-4 mt-2 w-fit">
         <TabsTrigger value="prompt">配置与提示词</TabsTrigger>
         <TabsTrigger value="wrapup">收尾提示词</TabsTrigger>
-        <TabsTrigger value="mcp">MCP</TabsTrigger>
-        <TabsTrigger value="skill">Skill</TabsTrigger>
-        <TabsTrigger value="tools">Tools</TabsTrigger>
+        <TabsTrigger value="shared">共享资源</TabsTrigger>
         {isCustom && <TabsTrigger value="triggers">触发</TabsTrigger>}
       </TabsList>
 
       {/* 配置 + 提示词 */}
       <TabsContent value="prompt" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         <div className="grid gap-4">
-          {(showLLM || showConfig || showWebSearch || showInteractiveShell) && (
+          {(showLLM || showConfig || showInteractiveShell) && (
             <div className="grid gap-3 rounded-md border p-3">
               {showLLM && (
                 <div className="grid gap-1.5">
@@ -325,24 +242,6 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                   <SaveIcon /> 保存配置
                 </Button>
               </div>
-              {showWebSearch && (
-                <div className="flex items-center gap-3 border-t pt-3">
-                  <Switch
-                    id="web-search"
-                    checked={webSearch}
-                    disabled={!webSearchGlobalOn}
-                    onCheckedChange={setWebSearch}
-                  />
-                  <div className="grid gap-0.5">
-                    <Label htmlFor="web-search" className="text-sm">网络搜索</Label>
-                    <span className="text-muted-foreground text-xs">
-                      {webSearchGlobalOn
-                        ? "为该 Agent 开启后（点上方保存生效），可用 web_search 联网检索"
-                        : "需先在「系统配置」开启网络搜索并配置后端，才能在此启用"}
-                    </span>
-                  </div>
-                </div>
-              )}
               {showInteractiveShell && (
                 <div className="flex items-center gap-3 border-t pt-3">
                   <Switch
@@ -590,77 +489,17 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         </div>
       </TabsContent>
 
-      {/* MCP 可见性 */}
-      <TabsContent value="mcp" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        <p className="text-muted-foreground mb-3 text-xs">勾选此 Agent 可见的 MCP 服务器。</p>
-        <div className="grid gap-2">
-          {mcp.map((m) => (
-            <label key={m.id} className="flex items-center gap-2 rounded-md border p-2 text-sm">
-              <Checkbox checked={mcpVisible.includes(m.id)} onCheckedChange={() => toggleMcp(m.id)} />
-              {m.name}
-              <span className="text-muted-foreground ml-auto text-xs">{m.transport}</span>
-            </label>
-          ))}
-          {mcp.length === 0 && <span className="text-muted-foreground text-xs">（暂无 MCP）</span>}
-        </div>
-      </TabsContent>
-
-      {/* Skill 可见性 */}
-      <TabsContent value="skill" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        <p className="text-muted-foreground mb-3 text-xs">勾选此 Agent 可见的 Skill。</p>
-        <div className="grid gap-2">
-          {skills.map((s) => (
-            <label key={s.name} className="flex items-center gap-2 rounded-md border p-2 text-sm">
-              <Checkbox checked={skillVisible.includes(s.name)} onCheckedChange={() => toggleSkill(s.name)} />
-              <span className="font-mono text-xs">{s.name}</span>
-              {s.description && <span className="text-muted-foreground ml-auto truncate text-xs">{s.description}</span>}
-            </label>
-          ))}
-          {skills.length === 0 && <span className="text-muted-foreground text-xs">（暂无 Skill）</span>}
-        </div>
-      </TabsContent>
-
-      {/* Tools 绑定 */}
-      <TabsContent value="tools" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        <p className="text-muted-foreground mb-3 text-xs">勾选绑定给此 Agent 的内置工具。</p>
-        <div className="grid gap-2">
-          {tools.map((t) => {
-            const isTraffic = TRAFFIC_TOOL_KEYS.has(t.key);
-            const gated = isTraffic && !captureOn; // traffic tools need 流量捕获 on
-            return (
-              <label
-                key={t.key}
-                className={cn(
-                  "flex items-center gap-2 rounded-md border p-2 text-sm",
-                  gated && "opacity-60",
-                )}
-              >
-                <Checkbox
-                  checked={t.agents.includes(agentKey)}
-                  disabled={gated}
-                  onCheckedChange={() => toggleTool(t)}
-                />
-                <span className="font-mono text-xs">{t.key}</span>
-                {isTraffic && (
-                  <Badge variant="secondary" className="px-1 py-0 text-[9px]">流量</Badge>
-                )}
-                {!t.enabled && (
-                  <Badge variant="outline" className="text-destructive px-1 py-0 text-[9px]">已停用</Badge>
-                )}
-                {gated ? (
-                  <span className="text-muted-foreground ml-auto text-xs">需开启流量捕获</span>
-                ) : (
-                  t.description && (
-                    <span className="text-muted-foreground ml-auto line-clamp-1 max-w-[55%] text-xs">
-                      {t.description}
-                    </span>
-                  )
-                )}
-              </label>
-            );
-          })}
-          {tools.length === 0 && <span className="text-muted-foreground text-xs">（暂无工具）</span>}
-        </div>
+      {/* 共享资源：仅说明，无可操作绑定 */}
+      <TabsContent value="shared" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          工具、MCP、Skill 已改为<b>全局共享</b>：在对应页面启用后，所有 Agent 均可使用，不再按 Agent 绑定或授权。
+          网络搜索同样由「系统配置」中的全局网络搜索开关统一控制。
+          前往{" "}
+          <Link href="/system/tools" className="text-foreground underline underline-offset-2">工具</Link>、{" "}
+          <Link href="/system/mcp" className="text-foreground underline underline-offset-2">MCP</Link>、{" "}
+          <Link href="/system/skills" className="text-foreground underline underline-offset-2">Skill</Link>{" "}
+          管理启用状态。
+        </p>
       </TabsContent>
 
       {/* 触发(P3, 仅自定义 agent) */}

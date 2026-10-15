@@ -35,11 +35,14 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { api } from "@/lib/api";
-import type { Agent, Tool } from "@/lib/types";
+import type { Tool } from "@/lib/types";
 
-// Traffic tools are host tools gated by the global 流量捕获 switch: bindable, but
-// only usable when capture is on. Keep in sync with traffic.SeedToolMetas.
+// Traffic tools are host tools gated by the global 流量捕获 switch: enabling them
+// has no effect until capture is on. Keep in sync with traffic.SeedToolMetas.
 const TRAFFIC_TOOL_KEYS = new Set(["traffic_search", "traffic_get"]);
+
+// 工具已全局共享：启用即对所有 Agent 可用，不再按 Agent 绑定。
+const SHARED_NOTE = "启用后全局共享，所有 Agent 均可使用；不再按 Agent 绑定。";
 
 // paramRows flattens schema.properties into an ordered row list for editing.
 // name/type/required are read-only (welded to the Go handler); description/default
@@ -143,29 +146,24 @@ function applyRows(schema: Record<string, any>, rows: ParamRow[]): Record<string
 // ToolEditor is the full edit form for one tool, rendered inside the drawer.
 function ToolEditor({
   tool,
-  agents,
   captureOn,
   onSaved,
   onClose,
 }: {
   tool: Tool;
-  agents: Agent[];
   captureOn: boolean;
   onSaved: () => void;
   onClose: () => void;
 }) {
-  // traffic tools can't be bound/enabled until the global 流量捕获 switch is on.
+  // traffic tools only work once the global 流量捕获 switch is on.
   const trafficGated = TRAFFIC_TOOL_KEYS.has(tool.key) && !captureOn;
   const [description, setDescription] = React.useState(tool.description);
-  const [bound, setBound] = React.useState<string[]>(tool.agents);
   const [enabled, setEnabled] = React.useState(tool.enabled);
   const [rows, setRows] = React.useState<ParamRow[]>(() => toRows(tool.schema));
   const [saving, setSaving] = React.useState(false);
 
   const setRow = (i: number, patch: Partial<ParamRow>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const toggleAgent = (k: string) =>
-    setBound((b) => (b.includes(k) ? b.filter((x) => x !== k) : [...b, k]));
 
   async function save() {
     setSaving(true);
@@ -173,7 +171,7 @@ function ToolEditor({
       await api.saveTool(tool.key, {
         description,
         schema: applyRows(tool.schema, rows),
-        agents: bound,
+        agents: tool.agents, // 历史绑定数据原样回传，不要用空数组擦除
         enabled,
       });
       toast.success(`已保存工具「${tool.key}」`);
@@ -201,34 +199,18 @@ function ToolEditor({
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4">
         {trafficGated && (
           <div className="border-amber-500/40 bg-amber-500/10 text-muted-foreground rounded-md border px-3 py-2 text-xs">
-            该工具依赖<b>流量捕获</b>。请先在「系统配置」开启流量捕获，才能绑定给 Agent 并启用。
+            该工具依赖<b>流量捕获</b>。请先在「系统配置」开启流量捕获，否则即使启用也无法使用。
           </div>
         )}
-        {/* binding + switch */}
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          <div className="grid gap-1.5">
-            <Label className="text-muted-foreground text-xs">绑定 Agent（决定该工具给哪些 Agent）</Label>
-            <div className="flex flex-wrap gap-3">
-              {agents.map((ag) => (
-                <label key={ag.key} className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={bound.includes(ag.key)}
-                    disabled={trafficGated}
-                    onCheckedChange={() => toggleAgent(ag.key)}
-                  />
-                  {ag.name}
-                  <span className="text-muted-foreground font-mono text-xs">{ag.key}</span>
-                </label>
-              ))}
-              {agents.length === 0 && <span className="text-muted-foreground text-xs">（无 Agent）</span>}
-            </div>
-          </div>
+        {/* enabled switch */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <div className="flex items-center gap-2">
             <Switch checked={enabled} onCheckedChange={setEnabled} id={`en-${tool.key}`} />
             <Label htmlFor={`en-${tool.key}`} className="text-sm">
               启用
             </Label>
           </div>
+          <span className="text-muted-foreground text-xs">{SHARED_NOTE}</span>
         </div>
 
         {/* description */}
@@ -349,23 +331,12 @@ function ToolGridCard({ tool, onClick }: { tool: Tool; onClick: () => void }) {
       <p className="text-muted-foreground line-clamp-1 h-4 text-xs">
         {tool.description || "（无描述）"}
       </p>
-      <div className="mt-auto flex flex-wrap gap-1 pt-1">
-        {tool.agents.length === 0 && (
-          <span className="text-muted-foreground text-[10px]">（未绑定 Agent）</span>
-        )}
-        {tool.agents.map((a) => (
-          <Badge key={a} variant="outline" className="px-1.5 py-0 text-[10px]">
-            {a}
-          </Badge>
-        ))}
-      </div>
     </button>
   );
 }
 
 export default function ToolsPage() {
   const [tools, setTools] = React.useState<Tool[]>([]);
-  const [agents, setAgents] = React.useState<Agent[]>([]);
   const [captureOn, setCaptureOn] = React.useState(false);
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
   const [customEdit, setCustomEdit] = React.useState<Tool | "new" | null>(null);
@@ -375,7 +346,6 @@ export default function ToolsPage() {
   }, []);
   React.useEffect(() => {
     reload();
-    api.agents().then(setAgents).catch(() => {});
     api.settings().then((s) => setCaptureOn(!!s.traffic_capture)).catch(() => {});
   }, [reload]);
 
@@ -387,15 +357,14 @@ export default function ToolsPage() {
     if (!q) return true;
     return (
       t.key.toLowerCase().includes(q) ||
-      t.description.toLowerCase().includes(q) ||
-      t.agents.some((a) => a.toLowerCase().includes(q))
+      t.description.toLowerCase().includes(q)
     );
   }, [query]);
   const systemTools = tools.filter((t) => t.system && matchTool(t));
   const customTools = tools.filter((t) => !t.system && matchTool(t));
   const allSystemCount = tools.filter((t) => t.system).length;
   const allCustomCount = tools.filter((t) => !t.system).length;
-  // clicking a built-in tool opens the binding drawer; a custom tool opens its full editor.
+  // clicking a built-in tool opens the description/params drawer; a custom tool opens its full editor.
   const openTool = (t: Tool) => (t.system ? setSelectedKey(t.key) : setCustomEdit(t));
 
   return (
@@ -403,13 +372,15 @@ export default function ToolsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">工具</h1>
-          <p className="text-muted-foreground text-sm">系统工具的描述/绑定，以及自定义工具(command/script/http)</p>
+          <p className="text-muted-foreground text-sm">
+            系统工具的描述/参数，以及自定义工具(command/script/http) · 启用的工具全局共享给所有 Agent
+          </p>
         </div>
         <div className="relative w-64">
           <SearchIcon className="text-muted-foreground absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2" />
           <Input
             className="h-8 pl-8 text-sm"
-            placeholder="搜索工具名、描述、Agent…"
+            placeholder="搜索工具名、描述…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -428,8 +399,8 @@ export default function ToolsPage() {
               <CardTitle>系统工具</CardTitle>
               <CardDescription>
                 {query.trim()
-                  ? `${systemTools.length} / ${allSystemCount} 个匹配，点击卡片编辑描述、参数默认值与 Agent 绑定`
-                  : `共 ${allSystemCount} 个，点击卡片编辑描述、参数默认值与 Agent 绑定`}
+                  ? `${systemTools.length} / ${allSystemCount} 个匹配，点击卡片编辑描述、参数默认值与启用状态`
+                  : `共 ${allSystemCount} 个，点击卡片编辑描述、参数默认值与启用状态`}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -491,12 +462,11 @@ export default function ToolsPage() {
             <>
               <SheetHeader className="px-4">
                 <SheetTitle className="font-mono">{selected.key}</SheetTitle>
-                <SheetDescription>编辑描述、参数默认值与 Agent 绑定</SheetDescription>
+                <SheetDescription>编辑描述、参数默认值与启用状态</SheetDescription>
               </SheetHeader>
               <ToolEditor
                 key={selected.key}
                 tool={selected}
-                agents={agents}
                 captureOn={captureOn}
                 onSaved={reload}
                 onClose={() => setSelectedKey(null)}
@@ -508,7 +478,6 @@ export default function ToolsPage() {
 
       <CustomToolDialog
         edit={customEdit}
-        agents={agents}
         onClose={() => setCustomEdit(null)}
         onSaved={() => {
           setCustomEdit(null);
@@ -535,12 +504,10 @@ type ExecState = {
 
 function CustomToolDialog({
   edit,
-  agents,
   onClose,
   onSaved,
 }: {
   edit: Tool | "new" | null;
-  agents: Agent[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -553,7 +520,6 @@ function CustomToolDialog({
     command: "", code: "", method: "GET", url: "", headers: "", body: "", timeout_ms: "", proxy: "", use_recording_proxy: false,
   });
   const [schemaText, setSchemaText] = React.useState("");
-  const [bound, setBound] = React.useState<string[]>([]);
   const [deferred, setDeferred] = React.useState(false);
   const [enabled, setEnabled] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
@@ -568,7 +534,7 @@ function CustomToolDialog({
     if (edit === "new") {
       setKey(""); setDescription(""); setKind("shell");
       setEx({ command: "", code: "", method: "GET", url: "", headers: "", body: "", timeout_ms: "", proxy: "", use_recording_proxy: false });
-      setSchemaText(""); setBound([]); setDeferred(false); setEnabled(true);
+      setSchemaText(""); setDeferred(false); setEnabled(true);
       return;
     }
     const t = edit;
@@ -588,12 +554,9 @@ function CustomToolDialog({
       use_recording_proxy: !!e.use_recording_proxy,
     });
     setSchemaText(t.schema && Object.keys(t.schema).length ? JSON.stringify(t.schema, null, 2) : "");
-    setBound(t.agents ?? []);
     setDeferred(!!t.deferred);
     setEnabled(t.enabled);
   }, [edit]);
-
-  const toggleAgent = (k: string) => setBound((b) => (b.includes(k) ? b.filter((x) => x !== k) : [...b, k]));
 
   function buildExec(): Record<string, unknown> {
     if (kind === "shell") return {};
@@ -627,7 +590,8 @@ function CustomToolDialog({
       }
     }
     setSaving(true);
-    const payload = { description, schema: kind === "shell" ? {} : schema, agents: bound, enabled, kind, exec: buildExec(), deferred: kind === "shell" ? false : deferred };
+    // 新建工具 agents=[]；编辑既有工具时按原值回传（兼容历史数据，不擦除）。
+    const payload = { description, schema: kind === "shell" ? {} : schema, agents: tool ? tool.agents : [], enabled, kind, exec: buildExec(), deferred: kind === "shell" ? false : deferred };
     try {
       if (isNew) await api.createCustomTool({ key: key.trim(), ...payload });
       else await api.updateCustomTool(tool!.key, payload);
@@ -778,18 +742,6 @@ function CustomToolDialog({
             </div>
           )}
 
-          <div className="grid gap-1.5">
-            <Label className="text-muted-foreground text-xs">绑定 Agent</Label>
-            <div className="flex flex-wrap gap-3">
-              {agents.map((a) => (
-                <label key={a.key} className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={bound.includes(a.key)} onCheckedChange={() => toggleAgent(a.key)} />
-                  {a.name}<span className="text-muted-foreground font-mono text-xs">{a.key}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={enabled} onCheckedChange={setEnabled} /> 启用
@@ -800,6 +752,7 @@ function CustomToolDialog({
               </label>
             )}
           </div>
+          <p className="text-muted-foreground text-xs">{SHARED_NOTE}</p>
 
           {kind !== "shell" && (
             <div className="grid gap-1.5 rounded-md border p-3">

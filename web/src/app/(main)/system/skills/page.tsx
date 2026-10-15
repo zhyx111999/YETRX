@@ -30,12 +30,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -43,7 +45,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import type { Agent, SkillItem, MCPServer, SkillCall, MissingSkill } from "@/lib/types";
+import { isSkillEnabled } from "@/lib/types";
+import type { SkillItem, MCPServer, SkillCall, MissingSkill } from "@/lib/types";
 
 function fmtTime(ts?: string) {
   if (!ts) return "从未调用";
@@ -292,12 +295,40 @@ function SkillsOverview({
   );
 }
 
+// ── Global enable switch ──────────────────────────────────────────────────
+// Skill 已全局共享：启用即对所有 Agent 可用。saving 期间开关显示目标值并禁用。
+function SkillEnabledToggle({
+  enabled,
+  saving,
+  onChange,
+}: {
+  enabled: boolean;
+  saving: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const status = enabled ? "已启用" : "已停用";
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs text-muted-foreground">全局启用</Label>
+      <div className="flex items-center gap-2">
+        <Switch id="skill-enabled" checked={enabled} disabled={saving} onCheckedChange={onChange} />
+        <Label htmlFor="skill-enabled" className="text-sm font-normal">
+          {saving ? "保存中…" : status}
+        </Label>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        启用后全局共享，所有 Agent 均可使用此 Skill；不再按 Agent 授权。
+      </p>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────
 export default function SkillsPage() {
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
-  const [agents, setAgents] = React.useState<Agent[]>([]);
   const [selected, setSelected] = React.useState<Selected | null>(null);
-  const [visibility, setVisibility] = React.useState<Record<string, string[]>>({});
+  // 全局启用开关保存中：skill 名 -> 正在保存的目标值（界面先显示目标值并禁用开关）。
+  const [savingEnabled, setSavingEnabled] = React.useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
 
   // file editor
@@ -321,7 +352,6 @@ export default function SkillsPage() {
   const [newCompat, setNewCompat] = React.useState("");
   const [newInst, setNewInst] = React.useState("");
   const [newMcps, setNewMcps] = React.useState<string[]>([]);
-  const [newVisibility, setNewVisibility] = React.useState<string[]>([]);
   const [mcpOptions, setMcpOptions] = React.useState<MCPServer[]>([]);
   const [creatingSkill, setCreatingSkill] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
@@ -342,18 +372,12 @@ export default function SkillsPage() {
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const load = React.useCallback(() => {
-    api.agents().then(setAgents).catch(() => {});
     api.mcpServers().then(setMcpOptions).catch(() => {});
     api.missingSkills().then(setMissing).catch(() => {});
-    api.skills().then((ss) => {
-      setSkills(ss);
-      ss.forEach((s) =>
-        api.skillVisibility(s.name)
-          .then((ids) => setVisibility((v) => ({ ...v, [s.name]: ids })))
-          .catch(() => {}),
-      );
-    }).catch(() => {});
+    api.skills().then(setSkills).catch(() => {});
   }, []);
+
+  const enabledOf = (s: SkillItem) => savingEnabled[s.name] ?? isSkillEnabled(s);
 
   React.useEffect(() => { load(); }, [load]);
 
@@ -552,15 +576,23 @@ export default function SkillsPage() {
     }
   }
 
-  async function toggleVisibility(skillName: string, agentId: string, agentName: string) {
-    const on = (visibility[skillName] ?? []).includes(agentId);
+  // 全局启用开关：保存期间禁用开关；成功以服务端返回值为准，失败回到原值；结束后都刷新列表。
+  async function toggleSkillEnabled(name: string, next: boolean) {
+    if (name in savingEnabled) return;
+    setSavingEnabled((m) => ({ ...m, [name]: next }));
     try {
-      await api.toggleSkillVisibility(agentId, skillName, !on);
-      toast.success(`${on ? "取消" : "授予"}「${agentName}」可见`);
-      const ids = await api.skillVisibility(skillName);
-      setVisibility((v) => ({ ...v, [skillName]: ids }));
+      const r = await api.setSkillEnabled(name, next);
+      setSkills((ss) => ss.map((s) => (s.name === name ? { ...s, enabled: r.enabled } : s)));
+      toast.success(`已${r.enabled ? "启用" : "停用"} Skill「${name}」`);
     } catch (e) {
-      toast.error("操作失败：" + (e as Error).message);
+      toast.error(`${next ? "启用" : "停用"}「${name}」失败：` + (e as Error).message);
+    } finally {
+      setSavingEnabled((m) => {
+        const rest = { ...m };
+        delete rest[name];
+        return rest;
+      });
+      load();
     }
   }
 
@@ -577,12 +609,10 @@ export default function SkillsPage() {
         mcps: newMcps.length ? newMcps : undefined,
         instructions: newInst.trim() || undefined,
       });
-      // apply initial visibility (fire-and-forget per agent; best-effort)
-      await Promise.all(newVisibility.map((id) => api.toggleSkillVisibility(id, name, true)));
-      toast.success("已创建 Skill");
+      toast.success("已创建 Skill（默认启用）");
       setNewOpen(false);
       setNewName(""); setNewDesc(""); setNewLicense(""); setNewCompat(""); setNewInst("");
-      setNewMcps([]); setNewVisibility([]);
+      setNewMcps([]);
       load();
     } catch (e) {
       toast.error("创建失败：" + (e as Error).message);
@@ -705,7 +735,7 @@ export default function SkillsPage() {
       <div className="flex items-center gap-3 border-b px-4 py-2.5 lg:px-6">
         <div className="flex flex-col gap-0.5">
           <h1 className="text-sm font-semibold leading-tight">Skill</h1>
-          <p className="text-muted-foreground text-xs">技能库 · agentskills.io 规范 · 按 Agent 授权可见</p>
+          <p className="text-muted-foreground text-xs">技能库 · agentskills.io 规范 · 启用后全局共享，所有 Agent 均可使用</p>
         </div>
         {/* 缺口清单：agent 点名调用、但库里没有的 skill —— 直接是该补什么的依据。 */}
         {missing.length > 0 && (
@@ -795,6 +825,14 @@ export default function SkillsPage() {
                           {s.calls}
                         </span>
                       )}
+                      {!enabledOf(s) && (
+                        <span
+                          className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
+                          title="已全局停用，所有 Agent 均不可用"
+                        >
+                          停用
+                        </span>
+                      )}
                       <span className={cn(
                         "absolute inset-y-0 right-1 hidden items-center gap-0.5 rounded pl-1 group-hover:flex",
                         isSkillSelected ? "bg-accent" : "bg-muted",
@@ -860,7 +898,7 @@ export default function SkillsPage() {
                 </div>
               </div>
 
-              {/* 左右分栏：配置（MCP/可见性）在左为主，调用统计在右为辅。
+              {/* 左右分栏：配置（MCP/全局启用）在左为主，调用统计在右为辅。
                   lg 以下放不下时用 flex-row-reverse 回落到单列——统计因 DOM 顺序在前，
                   窄屏时自然落到配置上方（与改版前的上下顺序一致）。 */}
               <div className="flex flex-col gap-6 lg:flex-row-reverse lg:items-start">
@@ -913,7 +951,7 @@ export default function SkillsPage() {
                   )}
                 </div>
 
-                {/* ── 左侧：关联 MCP + 可见性 ── */}
+                {/* ── 左侧：关联 MCP + 全局启用 ── */}
                 <div className="space-y-5 lg:min-w-0 lg:flex-1">
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">
@@ -937,23 +975,11 @@ export default function SkillsPage() {
                     )}
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">可见性（按 Agent 授权）</Label>
-                    <div className="space-y-2">
-                      {agents.map((a) => (
-                        <label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
-                          <Checkbox
-                            checked={(visibility[selectedSkill.name] ?? []).includes(a.id)}
-                            onCheckedChange={() => toggleVisibility(selectedSkill.name, a.id, a.name)}
-                          />
-                          {a.name}
-                        </label>
-                      ))}
-                      {agents.length === 0 && (
-                        <span className="text-xs text-muted-foreground">（暂无 Agent）</span>
-                      )}
-                    </div>
-                  </div>
+                  <SkillEnabledToggle
+                    enabled={enabledOf(selectedSkill)}
+                    saving={selectedSkill.name in savingEnabled}
+                    onChange={(on) => toggleSkillEnabled(selectedSkill.name, on)}
+                  />
                 </div>
               </div>
             </div>
@@ -994,7 +1020,7 @@ export default function SkillsPage() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {pendingDelete?.kind === "skill"
-                ? "将删除该 Skill 的全部文件、MCP 关联与可见性配置。此操作不可撤销。"
+                ? "将删除该 Skill 的全部文件与 MCP 关联。此操作不可撤销。"
                 : pendingDelete?.kind === "dir"
                   ? "将一并删除该文件夹下的所有文件。此操作不可撤销。"
                   : "此操作不可撤销。"}
@@ -1017,6 +1043,7 @@ export default function SkillsPage() {
         <SheetContent side="right" className="flex w-full flex-col gap-0 data-[side=right]:sm:max-w-xl">
           <SheetHeader className="px-4 pt-4">
             <SheetTitle>新建 Skill</SheetTitle>
+            <SheetDescription>创建后默认启用，全局共享给所有 Agent。</SheetDescription>
           </SheetHeader>
           <Tabs defaultValue="basic" className="flex min-h-0 flex-1 flex-col">
             <TabsList className="mx-4 mt-3 shrink-0 justify-start">
@@ -1026,14 +1053,6 @@ export default function SkillsPage() {
                 {newMcps.length > 0 && (
                   <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
                     {newMcps.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="visibility">
-                可见性
-                {newVisibility.length > 0 && (
-                  <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-                    {newVisibility.length}
                   </span>
                 )}
               </TabsTrigger>
@@ -1087,28 +1106,6 @@ export default function SkillsPage() {
                         }
                       />
                       {m.name}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-
-            {/* 可见性 */}
-            <TabsContent value="visibility" className="overflow-y-auto px-4 pb-4 pt-4 data-[state=inactive]:hidden">
-              <p className="mb-3 text-xs text-muted-foreground">选中的 Agent 创建后即可见此 Skill。</p>
-              {agents.length === 0 ? (
-                <p className="text-xs text-muted-foreground">（暂无 Agent）</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {agents.map((a) => (
-                    <label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={newVisibility.includes(a.id)}
-                        onCheckedChange={(on) =>
-                          setNewVisibility((cur) => on ? [...cur, a.id] : cur.filter((id) => id !== a.id))
-                        }
-                      />
-                      {a.name}
                     </label>
                   ))}
                 </div>

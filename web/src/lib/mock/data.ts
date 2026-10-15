@@ -3070,9 +3070,6 @@ export const agents: Agent[] = [
     enabled: true,
     description: "从漏洞详情手动启动，保存独立复测结论",
     max_turns: 0,
-    mcp_count: 0,
-    skill_count: 0,
-    tool_count: 2,
   },
   {
     id: "1",
@@ -3083,9 +3080,6 @@ export const agents: Agent[] = [
     enabled: true,
     description: "把任务目标拆成可探索的子目标",
     max_turns: 8,
-    mcp_count: 0,
-    skill_count: 1,
-    tool_count: 3,
   },
   {
     id: "2",
@@ -3096,9 +3090,6 @@ export const agents: Agent[] = [
     enabled: true,
     description: "围绕探索任务目标持续规划、判断目标并生成探索意图；不是对话子代理。",
     max_turns: 0,
-    mcp_count: 1,
-    skill_count: 2,
-    tool_count: 9,
   },
   {
     id: "3",
@@ -3110,9 +3101,6 @@ export const agents: Agent[] = [
     description: "人在环路对话，注入 hint / 高优意图",
     max_turns: 0,
     web_search: true,
-    mcp_count: 2,
-    skill_count: 3,
-    tool_count: 11,
   },
   {
     id: "4",
@@ -3126,9 +3114,6 @@ export const agents: Agent[] = [
     run_seconds: 1800,
     web_search: false,
     interactive_shell: true,
-    mcp_count: 2,
-    skill_count: 3,
-    tool_count: 14,
   },
   {
     id: "5",
@@ -3139,9 +3124,6 @@ export const agents: Agent[] = [
     enabled: true,
     description: "定时对新资产做被动侦察",
     max_turns: 12,
-    mcp_count: 1,
-    skill_count: 1,
-    tool_count: 4,
   },
 ];
 
@@ -3163,7 +3145,6 @@ export function agentDetail(key: string): AgentDetail {
     prompt: `你是 YETRX 的「${a.name}」。\n目标：{{.Goal}}\n资产概览：{{.AssetSummary}}\n路线提示：{{.RouteHint}}\n请基于以上信息推进探索，并通过工具把结果写回图。`,
     variables: promptVars,
     versions: promptVersions,
-    visibility: { mcp: [1, 2], skill: ["api-recon", "playwright-cli"] },
     wrapup_prompt: "",
     wrapup_default: "时间/步数将尽，请总结已确认发现并标记意图终态。",
     wrapup_max_turns: 0,
@@ -3223,6 +3204,7 @@ export const skills: SkillItem[] = [
     tasks: 6,
     usage_agents: ["worker", "planner"],
     last_used: "2026-08-20T09:12:00Z",
+    enabled: true,
   },
   {
     name: "playwright-cli",
@@ -3233,6 +3215,7 @@ export const skills: SkillItem[] = [
     tasks: 3,
     usage_agents: ["worker"],
     last_used: "2026-08-19T21:40:00Z",
+    enabled: true,
   },
   {
     name: "scopesentry",
@@ -3241,6 +3224,7 @@ export const skills: SkillItem[] = [
     calls: 0,
     tasks: 0,
     usage_agents: [],
+    enabled: false,
   },
 ];
 

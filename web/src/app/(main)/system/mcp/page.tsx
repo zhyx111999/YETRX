@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
-import type { MCPServer, MCPTool, Agent } from "@/lib/types";
+import type { MCPServer, MCPTool } from "@/lib/types";
 
 type Transport = "stdio" | "http" | "sse";
 type FormState = {
@@ -45,8 +45,6 @@ const emptyForm: FormState = {
 
 export default function MCPPage() {
   const [servers, setServers] = React.useState<MCPServer[]>([]);
-  const [agents, setAgents] = React.useState<Agent[]>([]);
-  const [visibility, setVisibility] = React.useState<Record<number, string[]>>({});
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<MCPServer | null>(null); // null = add mode
@@ -58,19 +56,7 @@ export default function MCPPage() {
   const [refreshing, setRefreshing] = React.useState(false);
 
   const load = React.useCallback(() => {
-    api.agents().then(setAgents).catch(() => {});
-    api
-      .mcpServers()
-      .then((ss) => {
-        setServers(ss);
-        ss.forEach((s) =>
-          api
-            .resourceVisibility("mcp", s.id)
-            .then((ids) => setVisibility((v) => ({ ...v, [s.id]: ids })))
-            .catch(() => {}),
-        );
-      })
-      .catch(() => {});
+    api.mcpServers().then(setServers).catch(() => {});
   }, []);
   React.useEffect(() => {
     load();
@@ -217,17 +203,6 @@ export default function MCPPage() {
     }
   }
 
-  async function toggleVisibility(serverId: number, agentId: string, agentName: string) {
-    const on = (visibility[serverId] ?? []).includes(agentId);
-    try {
-      await api.toggleVisibility(agentId, "mcp", serverId, !on);
-      toast.success(`${on ? "取消" : "授予"}「${agentName}」可见`);
-      load();
-    } catch (e) {
-      toast.error("操作失败：" + (e as Error).message);
-    }
-  }
-
   function renderForm() {
     return (
       <div className="grid gap-4 py-4">
@@ -363,7 +338,7 @@ export default function MCPPage() {
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">MCP</h1>
-        <p className="text-muted-foreground text-sm">外部 MCP 工具服务器 · 按 Agent 授权可见</p>
+        <p className="text-muted-foreground text-sm">外部 MCP 工具服务器 · 启用后全局共享，所有 Agent 均可使用</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -406,24 +381,10 @@ export default function MCPPage() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid gap-3">
+            <CardContent>
               <p className="text-muted-foreground text-sm">
                 {s.tools && s.tools.length > 0 ? `${s.tools.length} 个工具` : "尚未发现工具"}
               </p>
-              <div className="grid gap-2" onClick={(e) => e.stopPropagation()}>
-                <span className="text-muted-foreground text-xs">可见性（按 Agent 授权）</span>
-                <div className="flex flex-wrap gap-x-4 gap-y-2">
-                  {agents.map((a) => (
-                    <label key={a.key} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={(visibility[s.id] ?? []).includes(a.id)}
-                        onCheckedChange={() => toggleVisibility(s.id, a.id, a.name)}
-                      />
-                      {a.name}
-                    </label>
-                  ))}
-                </div>
-              </div>
             </CardContent>
           </Card>
         ))}
