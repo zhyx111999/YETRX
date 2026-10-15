@@ -28,7 +28,7 @@ var ErrChatBudget = errors.New("chat execution budget exhausted")
 // It carries no host types and depends on agentcore.Options only, so every
 // agent loop built from those options can use it.
 type steeredSession struct {
-	session         *agentcore.Session
+	session         RuntimeSession
 	control         ChatControl
 	pending         []string
 	restarted       bool
@@ -43,7 +43,7 @@ type steeredSession struct {
 	flush func()
 }
 
-func newControlledSession(opts agentcore.Options, control ChatControl) (*agentcore.Session, *steeredSession) {
+func newControlledSession(ctx context.Context, opts agentcore.Options, control ChatControl) (RuntimeSession, *steeredSession, error) {
 	s := &steeredSession{control: control, maxCalls: opts.MaxTurns, duration: opts.MaxDuration, started: time.Now()}
 	if s.maxCalls > 0 && opts.Settlement != nil {
 		s.maxCalls += opts.Settlement.MaxTurns
@@ -86,8 +86,9 @@ func newControlledSession(opts agentcore.Options, control ChatControl) (*agentco
 		}
 		return msg, stop, usage, err
 	}
-	s.session = agentcore.NewSession(opts)
-	return s.session, s
+	var err error
+	s.session, err = NewRuntimeSession(ctx, opts)
+	return s.session, s, err
 }
 
 // replayedEvents counts the events the loop emits when it replays a complete
@@ -165,10 +166,7 @@ func (s *steeredSession) Prompt(ctx context.Context, input string) iter.Seq2[har
 		var previous llm.Usage
 		for {
 			// Session.Prompt appends and records the user message when called.
-			events := s.session.Prompt(ctx, input)
-			if s.control.OnPrompt != nil {
-				s.control.OnPrompt()
-			}
+			events := acceptedPrompt(s.session, ctx, input, s.control.OnPrompt)
 			s.tail = 0
 			boundary := false
 			for ev, err := range events {

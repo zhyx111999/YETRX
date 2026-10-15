@@ -87,6 +87,7 @@ func guardPanic(t actool.CoreTool) actool.CoreTool { return &guardedTool{CoreToo
 
 type guardedTool struct{ actool.CoreTool }
 
+// UnwrapTool exposes the original tool to trusted runtime placement/observation code.
 func (g *guardedTool) UnwrapTool() actool.CoreTool { return g.CoreTool }
 
 func (g *guardedTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (res actool.Result, err error) {

@@ -27,7 +27,10 @@ import (
 // contiguous run is coalesced into a single record so the trace shows whole
 // messages, not dozens of fragments.
 func captureRun(ctx context.Context, opts agentcore.Options, input string, emit func(db.Activity)) (string, harness.TerminalReason, error) {
-	s := agentcore.NewSession(opts)
+	s, err := NewRuntimeSession(ctx, opts)
+	if err != nil {
+		return "", "", err
+	}
 	defer s.Close() // release the session's background-task manager (temp dir + processes)
 	return captureRunSession(ctx, s, input, emit)
 }
@@ -68,8 +71,7 @@ func captureRunSession(ctx context.Context, s promptSession, input string, emit 
 			rec(db.Activity{Kind: k, Summary: firstLine(s, 200), Detail: s})
 		}
 	}
-	// A tool-requesting response is complete once its trailing buffered text is
-	// committed; the session reports that boundary to the host only after this.
+	// Commit buffered response text before notifying the host response boundary.
 	if f, ok := s.(interface{ setResponseFlush(func()) }); ok {
 		f.setResponseFlush(flush)
 	}

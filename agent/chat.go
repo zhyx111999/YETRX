@@ -233,12 +233,17 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		}
 	}
 	ctx = attachSideCapture(ctx, &opts)
-	s, captureSession := newControlledSession(opts, control)
+	s, captureSession, err := newControlledSession(ctx, opts, control)
+	if err != nil {
+		return "", err
+	}
 	defer s.Close()
 	// reload prior conversation so the agent has context across turns (each Chat is
 	// a fresh session). First turn: no file yet → Resume loads nothing and proceeds.
 	if c.tx != nil {
-		_ = s.Resume(sessionID)
+		if err := s.Resume(sessionID); err != nil {
+			return "", err
+		}
 	}
 	// re-unlock skill-gated MCPs from prior Skill() calls in the reloaded history so
 	// revealed tools stay callable across the fresh session.
