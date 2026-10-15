@@ -15,6 +15,16 @@
 - `.10` 是未部署的预发布验证版。其 Linux CI 和五平台构建成功；Windows CI 仅在同一目录的 8.3/长路径比较上失败，测试已改为验证目录身份。上线兼容预检确认 browser 的 25 个工具能在 384MiB/1CPU/128 tasks 下发现；现有 ScopeSentry 地址为空，因此保留原有可选 MCP 失败容错。只有已成功启动的 helper 明确报告 MCP 配置/连接/目录错误才可忽略；执行池满、OS 限制、IPC 或清理错误仍阻止本次执行，禁止回退到未隔离执行。新增组合回归同时验证这两个分支。
 - 不声称真实模型吞吐、真实 WebSearch 服务或 Noa 实际模型压缩已实测。Linux/Windows限制与应用受控测试不等价于额外的文件系统/网络沙箱。
 
+源码 `c92c5e0c7002f1a7e12a8bf73fcaa27c8efda2ed` 已推送并发布 [v0.2.5-yetrx.11](https://github.com/zhyx111999/YETRX/releases/tag/v0.2.5-yetrx.11)。最终 [执行隔离 CI 38711677238](https://github.com/zhyx111999/YETRX/actions/runs/38711677238) 的 Windows/Linux 均成功；[数据库与会话 CI 38711677098](https://github.com/zhyx111999/YETRX/actions/runs/38711677098) 成功；[发布 38712073235](https://github.com/zhyx111999/YETRX/actions/runs/38712073235) 的前端、五平台和 release 成功，Docker 按配置跳过。本机最终进程包、server组合、全仓编译和相关 vet 的退出码全部为 0。
+
+- `.11` 已从 `.9` 直接上线，健康版本 `0.2.5-yetrx.11`、systemd active、无自动重启。Linux ZIP SHA256 `4372db06903b8b4e80faafecfa0ea195ecf6d2f19cea3ab6db8c17a3979cc2a1` 经发布 SHA256SUMS 校验；线上 binary SHA256 `9e8f6db6c40a0f0759898b6f4d18a6ebd0db3b98e76d5a873dabf3b6b1ab4ffb` 与资产一致。
+- 空闲校验后停服备份 PG custom dump、SQLite 一致性副本、受保护文件包、旧 binary 和 unit，再原子切换。按当次基线核对 51 张受保护表、6076 个文件、1 个 SQLite：26 个会话、4486 条活动、2 个模型和 1 个 Persona 保留；提示词由 10 版变为 12 版，仅精确匹配旧默认的 pentest/retester 新增版本，原行全部保留。三个匹配旧默认 hash 的工作流 Skill 更新；自定义配置和旧绑定保留。回滚备份 `/opt/artex/_rollback-v0.2.5-yetrx.11` 保留。
+- 线上实际管理页工具测试通过发布程序启动 resource worker，执行仅读取自身 PID/cgroup 的受控命令；验证 384MiB、1CPU、128 tasks、单树 OOM 分组及 bootstrap 环境剔除，结束后整个 runner cgroup 消失。网站位于 `execution-manager`；聚合 workers 为 3072MiB/4CPU/1024 tasks，网站不计入。生产 browser MCP 实际 refresh 得到 25 个工具，没有修改 MCP 配置。
+- Edge 1440×960、390×844 的聊天、设置、工具/MCP/Skill/Agent 页面只读验收通过，页面错误/API 写操作/横向溢出均为 0。认证 SSE 200、真实 snapshot 到达、历史不重播；新增历史工具和 Skill enabled 字段可从生产 API 读取。
+- 两项既有配置原样保留：ScopeSentry 的地址为空；保存的 Python 脚本解释器 `/usr/local/bin/python3` 不存在，实际系统解释器位于 `/usr/bin/python3`。前者沿用可选 MCP 容错；后者的脚本测试会返回原有启动错误。此次实际工具隔离验证使用可用的系统解释器，不把未配置的服务/解释器声称为已运行。
+
+- 本轮 Linux 专用 PostgreSQL 已停止，临时源码、Go 工具链、模块缓存、测试和候选二进制已清理；已合入的本轮开发工作树已移除。生产回滚与上线验证证据保留，本机共享 PostgreSQL 及其他既有工作树不动。
+
 ## v0.2.5-yetrx.8 / .9：会话逐步出字
 
 - 根因是 provider 已发送文字增量，但原 capture 只在连续片段完成时写活动，聊天页面再每 1–2 秒读取活动。新增请求级文字观察回调和认证 SSE 草稿，在生成过程中把已有原生事件送到原 Transcript；保留原聚合落盘、Markdown、气泡样式和工具记录，没有修改 Norma 或模型配置。

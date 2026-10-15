@@ -2,9 +2,10 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.2.5-yetrx.11] - 2026-10-15
 
 - 默认通过受监督子进程执行全部 Agent 会话循环、本地工具及 MCP；Linux cgroup v2、Windows Job Object 同时限制单个执行树和执行总资源，网站进程保留独立预算。启动验证限制，配置失败不静默回退；显式关闭可用原生进程内路径。
+- 可选 MCP 配置、连接或目录失败保留原有容错并记录日志；隔离、容量、IPC、清理失败明确阻止本次执行。取消先有界收尾原会话 iterator，保留 transcript，再终止进程树。
 - 全部预设与探索角色共享全局启用的工具、MCP 和 Skill。移除无效资源绑定控件，保留历史绑定、模型、提示词和预算；技能新增全局开关，网络搜索使用现有全局设置。
 - 新增只读 `list_chat_sessions`、`search_chat_sessions`、`read_chat_session`，支持字面搜索、键集分页和字符预算续读；历史记录始终作为数据呈现。
 
