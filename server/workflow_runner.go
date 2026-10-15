@@ -109,7 +109,7 @@ func (s *Server) runWorkflowTask(ctx context.Context, job workflow.Job) (string,
 		s.queueWorkflowDelivery(job.OwnerSession, workflowDelivery{Activity: activity})
 	}
 	ctx = agent.WithChatControl(ctx, agent.ChatControl{WorkingDirectory: job.CWD, Child: true, DrainMessages: job.Messages.Drain, RollbackOnError: job.Task.Thread != ""})
-	text, err := ca.Chat(ctx, key, session, prompt.String(), mode.MaxTurns, time.Duration(mode.RunSecs)*time.Second, mode.WebSearch, emit)
+	text, err := ca.Chat(ctx, key, session, prompt.String(), mode.MaxTurns, time.Duration(mode.RunSecs)*time.Second, s.m.WebSearchOpts().Enabled, emit)
 	if errors.Is(err, agent.ErrChatBudget) || errors.Is(err, agent.ErrChatRollback) {
 		err = workflow.Permanent(err)
 	} else if errors.Is(err, agent.ErrChatEmpty) {

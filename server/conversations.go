@@ -543,10 +543,7 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	pg := s.m.pg
 	maxTurns := s.agentMaxTurns(c.AgentKey)
 	maxDuration := time.Duration(s.agentRunSeconds(c.AgentKey)) * time.Second
-	webSearch := false
-	if a, err := pg.GetAgentByKey(c.AgentKey); err == nil && a != nil {
-		webSearch = a.WebSearch
-	}
+	webSearch := s.m.WebSearchOpts().Enabled
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
 	stream, closeStream := s.beginConversationStream(c.ID, c.AgentKey)
 	defer closeStream()

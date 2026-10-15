@@ -232,6 +232,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
+		s.upgradePentestPrompt()
 		s.seedOrchestrationTools() // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
 		if err := s.seedFindingRetester(); err != nil {
 			log.Printf("[retester] seed: %v", err)
@@ -414,12 +415,8 @@ func (s *Server) reapplyActiveProfile() {
 
 // webSearchFor gates the global web-search opts (backend/key) by an agent's own
 // web_search flag: the backend/key come from the global config, each agent decides on/off.
-func (s *Server) webSearchFor(key string) agent.WebSearchOpts {
-	o := s.m.WebSearchOpts()
-	if a, err := s.m.pg.GetAgentByKey(key); err != nil || a == nil || !a.WebSearch {
-		o.Enabled = false
-	}
-	return o
+func (s *Server) webSearchFor(_ string) agent.WebSearchOpts {
+	return s.m.WebSearchOpts()
 }
 
 // nonStreamingResolver returns a resolver capturing a profile's streaming choice.
@@ -899,6 +896,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/skills/missing", s.fsMissingSkills)   // 未命中(想调但不存在)的 skill 名
 	mux.HandleFunc("GET /api/skills/{name}/usage", s.fsSkillUsage) // 单个 skill 的最近调用
 	mux.HandleFunc("PUT /api/skills/{name}/meta", s.fsUpdateSkillMeta)
+	mux.HandleFunc("PUT /api/skills/{name}/enabled", s.fsSetSkillEnabled)
 	mux.HandleFunc("POST /api/skills/{name}/dirs", s.fsCreateDir)
 	mux.HandleFunc("GET /api/skills/{name}/files", s.fsListFiles)
 	// {file...} captures path segments including slashes (e.g. scripts/extract.py)

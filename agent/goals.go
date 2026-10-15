@@ -100,14 +100,14 @@ func DecomposeGoals(ctx context.Context, prov llm.Provider, dataDir, goalText, d
 	if prov == nil {
 		return nil
 	}
-	return DecomposeGoalsWithProvider(ctx, prov, dataDir, goalText, desc, as, ts, taskID, false, 0, emit)
+	return DecomposeGoalsWithProvider(ctx, prov, dataDir, goalText, desc, as, ts, taskID, false, 0, WebSearchOpts{}, emit)
 }
 
 // DecomposeGoalsWithProvider is the task-runtime variant used when a task has an
 // ordered provider chain. It preserves the same tools and write behavior while
 // letting the caller own provider selection/failover. maxTokens is the profile's
 // per-reply output cap (0 = send none).
-func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir, goalText, desc string, as *db.AssetStore, ts *db.ExplorationStore, taskID int64, nonStreaming bool, maxTokens int, emit func(db.Activity)) []GoalSpec {
+func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir, goalText, desc string, as *db.AssetStore, ts *db.ExplorationStore, taskID int64, nonStreaming bool, maxTokens int, search WebSearchOpts, emit func(db.Activity)) []GoalSpec {
 	if prov == nil {
 		return nil
 	}
@@ -128,16 +128,14 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	// {{.EngagementDescription}} template var — else a prompt that references the var
 	// would inject the description twice. System prompt stays pure static instructions.
 	sys := renderSystem("goals", goalsDefaultTmpl, GoalsVars{DataDir: dataDir, Now: nowStr()})
-	// set_constraints 始终可用(不依赖 asset store):正文已含「先抽操作约束再拆目标」这步
-	// (可在 agent 编辑页改措辞),这里只需接上工具。
-	tools := []actool.CoreTool{tsx.setGoals(), tsx.setConstraints()}
-	// Wire add_task_scope only when we have a real asset store + task to write to.
-	// The scope-extraction tail is appended in lockstep so the prompt never asks for
-	// a tool that isn't present.
+	// Goal setup uses the same catalog; its real stores determine domain tools.
+	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
+	tools, def, cleanup := AugmentTools(ctx, "goals", append(tsx.AvailableDomainTools(), actool.DefaultTools()...))
+	defer cleanup()
 	if as != nil && taskID > 0 {
-		tools = append(tools, tsx.addTaskScope())
 		sys += goalsScopeTail
 	}
+	system, boundary := deferredSystem(sys, def)
 	userMsg := "任务目标：\n" + goalText
 	if d := strings.TrimSpace(desc); d != "" {
 		userMsg += "\n\n任务描述（背景信息，可能含靶标范围/flag 数量/交战说明；仅供参考，不要臆造其中未提及的内容）：\n" + d
@@ -152,8 +150,20 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	}
 	captureRun(ctx, agentcore.Options{
 		Provider:               prov,
-		SystemPrompt:           []string{sys},
+		SystemPrompt:           system,
+		DynamicBoundary:        boundary,
 		Tools:                  tools,
+		DeferredTools:          def.Deferred,
+		UnlockSet:              def.Unlock,
+		WorkingDir:             dataDir,
+		EnableWebSearch:        search.Enabled,
+		WebSearchBackend:       search.Backend,
+		BraveSearchAPIKey:      search.BraveKey,
+		TavilySearchAPIKey:     search.TavilyKey,
+		DeepSeekSearchBaseURL:  search.DeepSeekBaseURL,
+		DeepSeekSearchAPIKey:   search.DeepSeekAPIKey,
+		DeepSeekSearchModel:    search.DeepSeekModel,
+		WebSearchProxy:         search.Proxy,
 		PermissionMode:         acperm.ModeBypass,
 		DisableBackgroundTasks: true,
 		// 3 步(抽约束 → 登记范围 → 拆目标)各需一次工具调用,给足回合避免收尾前漏调 set_goals。

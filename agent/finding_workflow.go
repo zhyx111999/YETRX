@@ -22,14 +22,11 @@ func findingTrafficBindingEnabled() bool {
 // Applied after ToolResolve: user descriptions and prompts remain intact, while
 // all actual reporters (including Planner and custom chat agents) see the same
 // API contract. Disabled/unbound tools are never reintroduced here.
-func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.CoreTool, string) {
+func findingWorkflowTools(_ string, tools []actool.CoreTool) ([]actool.CoreTool, string) {
 	if !findingTrafficBindingEnabled() {
 		out := make([]actool.CoreTool, 0, len(tools))
 		for _, tool := range tools {
 			if tool.Name() == "bind_finding_traffic" {
-				continue
-			}
-			if agentKey == "reporter" && (tool.Name() == "traffic_search" || tool.Name() == "traffic_get" || tool.Name() == "traffic_blob") {
 				continue
 			}
 			switch tool.Name() {

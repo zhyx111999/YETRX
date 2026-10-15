@@ -922,6 +922,12 @@ CREATE TABLE IF NOT EXISTS agent_skill_visibility (
 );
 CREATE INDEX IF NOT EXISTS idx_askv_skill ON agent_skill_visibility(skill_name);
 
+-- Global skill choices; old per-agent visibility remains available as history.
+CREATE TABLE IF NOT EXISTS skill_settings (
+    name TEXT PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT true
+);
+
 -- Skill 调用账本（见 db/skill_usage.go）。一次 Skill() 调用一行，只记维度不记正文。
 -- 刻意不设外键：任务/会话删除后统计仍要保留（与 llm_usage 同理），skill 本身也只是
 -- 文件系统上的目录名，没有对应的表。

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"log"
-	"path/filepath"
 	"strings"
 
 	"github.com/Autumn-27/artex/agent"
@@ -15,13 +14,8 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-// wireAgentAugment connects the PG agent_visibility table into the agent runtime:
-// an agent's visible skills are loaded from the filesystem and packed into one
-// Skill meta-tool; its visible stdio MCP servers are spawned and expanded to
-// mcp__server__tool. skillDir is the root directory of all skill subdirectories.
-// hostTools, if set, returns runtime host tools (currently the traffic tools when
-// capture is on) to add to EVERY agent's base list — the DB tools table then
-// filters them per-agent binding. Empty/nil → no host tools this run (capture off).
+// Every preset sees the same enabled resources. Skills still unlock their MCP
+// tools on demand; bindings remain stored but no longer restrict discovery.
 func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
@@ -30,28 +24,12 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		}
 		var extra []actool.CoreTool
 
-		// --- skills: load visible skills into reg (used for the Skill meta-tool
-		// and to know which MCP servers are skill-gated). ---
-		var reg *skill.Registry
-		if names, _ := pg.AgentSkillNames(a.ID); len(names) > 0 {
-			nameSet := make(map[string]bool, len(names))
-			for _, n := range names {
-				nameSet[n] = true
-			}
-			if allReg, err := skill.LoadDir(skillDir); err == nil && allReg != nil {
-				reg = skill.NewRegistry()
-				for _, s := range allReg.List() {
-					// match by directory name (Base of Dir), not by skill display Name
-					if s.Dir != "" && nameSet[filepath.Base(s.Dir)] {
-						reg.Add(s)
-					}
-				}
-				if len(reg.List()) == 0 {
-					reg = nil
-				}
-			}
+		reg, err := loadSharedSkills(ctx, pg, skillDir)
+		if err != nil {
+			log.Printf("[resources] skill enablement unavailable; skipping extras to preserve MCP gates: %v", err)
+			return nil, agent.DeferredInfo{}, nil
 		}
-		// A server named by any visible skill's `mcps:` is skill-gated: its tools
+		// A server named by any enabled skill's `mcps:` is skill-gated: its tools
 		// are deferred + locked (not in the global block) until that skill loads.
 		gated := map[string]bool{}
 		if reg != nil {
@@ -62,27 +40,19 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			}
 		}
 
-		// --- mcp: connect enabled servers that are directly visible to this agent
-		// OR skill-gated (named in a visible skill's mcps field). Directly-visible
-		// and NOT gated → global (unlocked from session start). Skill-gated →
-		// deferred until that skill is invoked (regardless of direct visibility).
+		// Connect globally enabled MCPs. Skill-referenced tools stay locked until
+		// the skill loads; all other enabled MCP tools are initially discoverable.
 		var closers []io.Closer
 		serverTools := map[string][]string{} // server name → its tool names
 		var allNames, globalNames []string
 		globalSet := map[string]bool{}
 		{
-			mcpIDs, _ := pg.AgentVisible(a.ID, "mcp")
-			want := idSet(mcpIDs)
 			all, _ := pg.ListMCP()
 			for _, m := range all {
 				if !m.Enabled {
 					continue
 				}
-				directVisible := want[m.ID]
 				skillGated := gated[m.Name]
-				if !directVisible && !skillGated {
-					continue // neither directly visible nor referenced by a visible skill
-				}
 				cl, err := connectMCP(ctx, m)
 				if err != nil {
 					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
@@ -98,8 +68,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					extra = append(extra, t)
 					allNames = append(allNames, t.Name())
 					serverTools[m.Name] = append(serverTools[m.Name], t.Name())
-					if directVisible && !skillGated {
-						// directly visible and not gated → available from session start
+					if !skillGated {
 						globalNames = append(globalNames, t.Name())
 						globalSet[t.Name()] = true
 					}
@@ -144,17 +113,12 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			extra = append(extra, meterSkillTool(reg.Tool(), pg, reg, a.Key, agent.RunInfoFrom(ctx)))
 		}
 
-		// host tools (traffic / orchestration / custom) — added to every agent's base;
-		// ToolResolve then keeps them only for agents the tool is bound to. Custom
-		// tools flagged deferred contribute their names to the deferred wiring so
-		// their schema is withheld (SearchExtraTools/ExecuteExtraTool), same as MCP.
+		// Enabled host tools share the same discovery path. Deferred schemas stay
+		// behind SearchExtraTools/ExecuteExtraTool without preset-specific gates.
 		if hostTools != nil {
 			ht, deferredBinds := hostTools()
 			extra = append(extra, ht...)
-			for name, boundAgents := range deferredBinds {
-				if !contains(boundAgents, a.Key) {
-					continue // only defer names this agent is actually bound to
-				}
+			for name := range deferredBinds {
 				allNames = append(allNames, name)       // schema withheld from the prompt
 				globalNames = append(globalNames, name) // advertised in the deferred block
 				globalSet[name] = true
@@ -179,14 +143,6 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 	}
 }
 
-func idSet(ids []int64) map[int64]bool {
-	m := make(map[int64]bool, len(ids))
-	for _, id := range ids {
-		m[id] = true
-	}
-	return m
-}
-
 // seedPrompts writes each built-in agent's code-default prompt body into
 // agent_prompts on startup — first-insert only (SeedPromptIfEmpty is a no-op once
 // any version exists), so the DB becomes the authoritative editable source while
@@ -204,11 +160,8 @@ func seedPrompts(pg *db.DB) {
 	}
 }
 
-// wireTools seeds the built-in tool catalog (idempotent, first-insert only so page
-// edits survive restart) and wires the DB tools table into the agent runtime: at
-// tool-assembly time each built-in tool is filtered by its agent binding / enabled
-// flag and, if kept, wrapped so the model sees the DB-overridden description/schema
-// and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
+// wireTools seeds the global catalog without overwriting user edits, then applies
+// enabled states, descriptions, schemas and parameter defaults to every role.
 func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
@@ -239,8 +192,8 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.ToolResolve = func(ctx context.Context, agentKey string, tools []actool.CoreTool) []actool.CoreTool {
 		rows, err := pg.ListTools()
 		if err != nil {
-			log.Printf("[tools] 读取工具表失败，按代码默认放行: %v", err)
-			return tools
+			log.Printf("[tools] read global enablement failed; tool assembly unavailable: %v", err)
+			return []actool.CoreTool{}
 		}
 		byKey := make(map[string]*db.Tool, len(rows))
 		for _, t := range rows {
@@ -261,23 +214,20 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				out = append(out, t)
 				continue
 			}
-			if !row.Enabled || !contains(row.Agents, agentKey) {
-				continue // disabled globally or not bound to this agent → drop
+			if !row.Enabled {
+				continue
 			}
 			out = append(out, resolve(t, row))
 		}
-		// inject: domain tools bound to this agent in the DB but absent from the
-		// incoming list. Covers agents (Auto, custom) whose base only has DefaultTools
-		// and therefore never includes ToolSet-backed domain tools. Per-task instances
-		// in the base always win: inList is built from the original incoming list so a
-		// worker's own upsert_asset is never shadowed by the server-level registry copy.
+		// Fill absent globally available domain operations. A per-task instance
+		// always wins over its global counterpart, preserving its real stores.
 		if len(domainReg) > 0 {
 			inList := make(map[string]bool, len(tools))
 			for _, t := range tools {
 				inList[t.Name()] = true
 			}
 			for _, row := range rows {
-				if row.Kind == "shell" || !row.Enabled || !contains(row.Agents, agentKey) || inList[row.Key] {
+				if row.Kind == "shell" || !row.Enabled || inList[row.Key] {
 					continue
 				}
 				inst, ok := domainReg[row.Key]
@@ -287,12 +237,10 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 				out = append(out, resolve(inst, row))
 			}
 		}
-		// shell hints: user-defined kind="shell" tools are not callable — they are
-		// environment declarations that tell the model which command-line tools are
-		// installed. Collect the ones bound to this agent and append to Bash's description.
+		// Shell declarations are global environment hints, not callable tools.
 		var shellHints []string
 		for _, row := range rows {
-			if row.Kind == "shell" && row.Enabled && contains(row.Agents, agentKey) {
+			if row.Kind == "shell" && row.Enabled {
 				shellHints = append(shellHints, "- "+row.Key+": "+row.Description)
 			}
 		}
@@ -333,16 +281,8 @@ func contains(ss []string, v string) bool {
 	return false
 }
 
-// buildDomainReg builds a name→CoreTool registry from a server-level ToolSet
-// (real AssetStore, nil ExplorationStore, taskID=0). Used by ToolResolve to inject
-// domain tools into agents (Auto, custom) that don't own a per-task ToolSet.
-// nil as → returns nil (no injection, graceful degradation).
-//
-// The nil ExplorationStore is deliberate — these instances are task-less by
-// construction — so every tool here must tolerate it. Asset/company tools do
-// (they only need the AssetStore); the exploration-graph tools refuse with a
-// clear message via ToolSet.needExploration. Binding one of them to a task-less
-// agent in the tools table is therefore a useless tool, not a crash.
+// buildDomainReg supplies only operations with real global stores. Task-local
+// operations are supplied by each execution's own ToolSet, before this registry.
 func buildDomainReg(as *db.AssetStore) map[string]actool.CoreTool {
 	if as == nil {
 		return nil
@@ -350,7 +290,7 @@ func buildDomainReg(as *db.AssetStore) map[string]actool.CoreTool {
 	serverTS := agent.NewToolSet(nil, "")
 	serverTS.SetAssetStore(as, as.Companies())
 	reg := make(map[string]actool.CoreTool)
-	for _, t := range serverTS.AllDomainTools() {
+	for _, t := range serverTS.AvailableDomainTools() {
 		reg[t.Name()] = t
 	}
 	return reg

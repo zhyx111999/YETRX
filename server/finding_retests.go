@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -103,8 +102,8 @@ func (s *Server) startFindingRetest(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, err.Error())
 			return
 		}
-		if t == nil || !t.Enabled || !slices.Contains(t.Agents, a.Key) {
-			writeErr(w, 409, "请为复测 Agent 启用并绑定工具："+key)
+		if t == nil || !t.Enabled {
+			writeErr(w, 409, "请启用复测工具："+key)
 			return
 		}
 	}

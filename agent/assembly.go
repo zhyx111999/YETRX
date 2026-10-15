@@ -23,14 +23,9 @@ type DeferredInfo struct {
 	UnlockSkill     func(skillName string)
 }
 
-// ToolAugment, if set, returns the EXTRA tools an agent should see beyond its
-// built-in base set — the agent's visible skills (packed into one Skill meta-tool)
-// and visible MCP servers (expanded to mcp__server__tool). It also returns the
-// DeferredInfo describing how those MCP tools are deferred/gated. The server wires
-// it to the PG agent_visibility table. cleanup releases any spawned MCP clients.
-//
-// When nil, agents run with only their built-in tools — behavior is unchanged
-// until a user assigns a skill/MCP to the agent in the UI.
+// ToolAugment supplies globally enabled skills, MCPs and host capabilities.
+// Deferred discovery and skill unlocks remain session-local. cleanup releases
+// clients created for this execution. Nil keeps the built-in tool path.
 var ToolAugment func(ctx context.Context, agentKey string) (extra []actool.CoreTool, def DeferredInfo, cleanup func())
 
 // AugmentTools returns base plus the agent's visible skill/MCP tools, the
@@ -53,18 +48,34 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 			out = append(append([]actool.CoreTool{}, base...), extra...)
 		}
 	}
-	// DB tools table has the final say on the built-in tools: drop the ones this
-	// agent isn't bound to (or that are disabled) and swap in overridden
-	// descriptions/schemas + default injection. MCP/skill/host tools have no row
-	// and pass through untouched, so deferred/unlock wiring stays consistent.
+	// The global catalog controls enablement and parameter/description overrides.
 	if ToolResolve != nil {
 		out = ToolResolve(ctx, agentKey, out)
 	}
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
-	for i, t := range out {
-		out[i] = guardPanic(t)
+	seen := make(map[string]bool, len(out))
+	unique := make([]actool.CoreTool, 0, len(out))
+	for _, t := range out {
+		if seen[t.Name()] {
+			log.Printf("[tools] duplicate registration %q skipped; first execution-specific instance retained", t.Name())
+			continue
+		}
+		seen[t.Name()] = true
+		unique = append(unique, guardPanic(t))
 	}
-	return out, def, cleanup
+	keepNames := func(names []string) []string {
+		kept := make([]string, 0, len(names))
+		added := map[string]bool{}
+		for _, name := range names {
+			if seen[name] && !added[name] {
+				kept = append(kept, name)
+				added[name] = true
+			}
+		}
+		return kept
+	}
+	def.Deferred, def.GlobalNames = keepNames(def.Deferred), keepNames(def.GlobalNames)
+	return unique, def, cleanup
 }
 
 // guardPanic turns a panicking tool handler into an ordinary tool error. The

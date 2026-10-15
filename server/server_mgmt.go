@@ -26,7 +26,6 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/skill"
 )
 
 // validSkillName checks the agentskills.io name constraints, widened so a skill can
@@ -959,6 +958,7 @@ func (s *Server) pgMCPTools(w http.ResponseWriter, r *http.Request) {
 
 type skillFileNode struct {
 	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
 	Description   string   `json:"description,omitempty"`
 	License       string   `json:"license,omitempty"`
 	Compatibility string   `json:"compatibility,omitempty"`
@@ -974,13 +974,13 @@ type skillFileNode struct {
 
 func (s *Server) fsListSkills(w http.ResponseWriter, r *http.Request) {
 	_ = os.MkdirAll(s.skillDir, 0o755)
-	allReg, _ := skill.LoadDir(s.skillDir)
-	metaByDir := map[string]skill.Skill{}
-	if allReg != nil {
-		for _, sk := range allReg.List() {
-			if sk.Dir != "" {
-				metaByDir[filepath.Base(sk.Dir)] = sk
-			}
+	states := map[string]bool{}
+	if s.m != nil && s.m.pg != nil {
+		var err error
+		states, err = s.m.pg.SkillEnabledStates(r.Context())
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
 		}
 	}
 	entries, err := os.ReadDir(s.skillDir)
@@ -1006,11 +1006,14 @@ func (s *Server) fsListSkills(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		dirName := e.Name()
-		node := skillFileNode{Name: dirName, Agents: []string{}}
+		node := skillFileNode{Name: dirName, Enabled: true, Agents: []string{}}
+		if enabled, explicit := states[dirName]; explicit {
+			node.Enabled = enabled
+		}
 		if st, ok := statBySkill[dirName]; ok {
 			node.Calls, node.Tasks, node.Agents, node.LastUsed = st.Calls, st.Tasks, st.Agents, st.LastUsed
 		}
-		if meta, ok := metaByDir[dirName]; ok {
+		if meta, err := readSharedSkill(filepath.Join(s.skillDir, dirName)); err == nil {
 			node.Description = meta.Description
 			node.License = meta.License
 			node.Compatibility = meta.Compatibility
@@ -1467,6 +1470,10 @@ func (s *Server) fsDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.RemoveAll(filepath.Join(s.skillDir, name)); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if err := pg.DeleteSkillSettings(r.Context(), name); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}

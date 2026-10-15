@@ -2,92 +2,179 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	actool "github.com/Autumn-27/norma/tool"
 )
 
-// hasSkillTool reports whether the packed tool set contains the Skill meta-tool.
 func hasSkillTool(tools []actool.CoreTool) bool {
-	for _, t := range tools {
-		if t.Name() == "Skill" {
+	for _, tool := range tools {
+		if tool.Name() == "Skill" {
 			return true
 		}
 	}
 	return false
 }
 
-// TestAssembleVisibleSkill verifies a filesystem skill made visible to an agent is
-// packed into that agent's tool set (as the single Skill meta-tool) via the wired
-// ToolAugment hook. Skills live on disk under skillDir; visibility is a per-agent
-// (agent × skill_name) row keyed by the skill's directory name.
-func TestAssembleVisibleSkill(t *testing.T) {
-	dsn, _, err := db.DSN()
+func TestSharedResourcesAcrossEveryPreset(t *testing.T) {
+	e := newNativeEnv(t)
+	presets, err := e.pg.ListAgents()
 	if err != nil {
-		t.Skipf("no database config (%v) — skipping", err)
+		t.Fatal(err)
 	}
-	pg, err := db.Open(dsn)
+	for _, preset := range presets {
+		got := e.read(preset.Key)
+		if !got.sdk || !got.skill || !got.mcp || got.custom == "" || got.system == "" {
+			t.Errorf("%s lacks shared enabled resources: %+v", preset.Key, got)
+		}
+	}
+	if err := e.pg.SetSkillEnabled(context.Background(), e.skill, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.pg.DeleteSkillSettings(context.Background(), e.skill) })
+	for _, preset := range presets {
+		if got := e.read(preset.Key); got.skill {
+			t.Errorf("%s sees disabled skill", preset.Key)
+		}
+	}
+	// Global choices do not erase or rewrite historical binding rows.
+	for _, key := range e.keys {
+		bound, err := e.pg.AgentSkillNames(e.ids[key])
+		if err != nil || !contains(bound, e.skill) {
+			t.Errorf("%s bindings changed: %v, %v", key, bound, err)
+		}
+	}
+}
+
+func TestSharedExecutionRolesUseTheSameCatalog(t *testing.T) {
+	e := newNativeEnv(t)
+	task, err := e.pg.CreateTaskWithOptions("shared resources", "verify assembly", db.TaskCreateOptions{})
 	if err != nil {
-		t.Skipf("postgres unavailable (%v) — skipping", err)
-	}
-	defer pg.Close()
-
-	// Filesystem skill fixture: <skillDir>/t-assemble/SKILL.md. The directory name
-	// (t-assemble) is the visibility key matched against AgentSkillNames.
-	skillDir := t.TempDir()
-	const skillName = "t-assemble"
-	if err := os.MkdirAll(filepath.Join(skillDir, skillName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	md := "---\nname: t-assemble\ndescription: do the thing\n---\ndo the thing"
-	if err := os.WriteFile(filepath.Join(skillDir, skillName, "SKILL.md"), []byte(md), 0o644); err != nil {
+	t.Cleanup(func() { _ = e.pg.DeleteTask(task.ID) })
+	ts, assets := e.pg.Exploration(task.ExplorationID), e.pg.Assets()
+	intentID, err := ts.AddNode("intent", map[string]any{"summary": "verify shared resources"}, 0, "running", "planner", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	wireAgentAugment(pg, skillDir, nil)
-	t.Cleanup(func() { agent.ToolAugment = nil })
-
-	ag, _ := pg.GetAgentByKey("planner")
-	if ag == nil {
-		t.Fatal("planner agent missing")
-	}
-
-	// Isolate this test from whatever skill visibility the planner already has in the
-	// shared DB: clear it now, restore it on cleanup.
-	orig, _ := pg.AgentSkillNames(ag.ID)
-	if err := pg.SetAgentSkillVisibility(ag.ID, nil); err != nil {
+	intent, err := ts.GetNode(intentID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = pg.SetAgentSkillVisibility(ag.ID, orig) })
-
-	// before: skill not visible → no Skill meta-tool
-	extra, _, cleanup := agent.ToolAugment(context.Background(), "planner")
-	cleanup()
-	if hasSkillTool(extra) {
-		t.Fatalf("expected no Skill meta-tool before the skill is made visible")
+	for _, role := range []string{"planner", "worker", "mainagent", "goals"} {
+		t.Run(role, func(t *testing.T) {
+			provider := &recordingProvider{callTool: e.custom}
+			ctx, dir := context.Background(), t.TempDir()
+			var runErr error
+			switch role {
+			case "planner":
+				runner := agent.NewPlanner(provider, "fixture", dir, nil, 100000, 3)
+				runner.SetNonStreaming(func() bool { return true })
+				_, _, runErr = runner.Plan(ctx, task.ID, assets, ts, "verify assembly", nil, nil)
+			case "worker":
+				runner := agent.NewWorker(provider, "fixture", dir, nil, 100000, 3)
+				runner.SetNonStreaming(func() bool { return true })
+				_, _, runErr = runner.Execute(ctx, "fixture", task.ID, assets, ts, intent, nil, nil, nil, nil)
+			case "mainagent":
+				runner := agent.NewMainAgent(provider, "fixture", dir, nil, 100000, 3)
+				runner.SetNonStreaming(func() bool { return true })
+				_, runErr = runner.Chat(ctx, task.ID, 0, assets, ts, "verify assembly", "hello", nil, nil, nil, nil, nil)
+			case "goals":
+				agent.DecomposeGoalsWithProvider(ctx, provider, dir, "verify assembly", "", assets, ts, task.ID, true, 0, agent.WebSearchOpts{}, nil)
+			}
+			if runErr != nil {
+				t.Fatal(runErr)
+			}
+			if len(provider.reqs) < 2 {
+				t.Fatalf("no real shared tool round-trip: %d calls", len(provider.reqs))
+			}
+			available := map[string]bool{}
+			for _, tool := range provider.reqs[0].Tools {
+				available[tool.Name] = true
+			}
+			for _, key := range []string{"Skill", e.custom, "Read", "Bash", "Glob", "Grep", "MultiEdit", "record_fact", "list_goals"} {
+				if !available[key] {
+					t.Errorf("missing %s", key)
+				}
+			}
+			if !strings.Contains(strings.Join(provider.reqs[0].System, "\n"), e.mcpTool) {
+				t.Error("global MCP absent from deferred discovery")
+			}
+			if !strings.Contains(string(mustJSON(provider.reqs[1].Messages)), "nr-e2e") {
+				t.Error("custom tool result did not reach next request")
+			}
+		})
 	}
+}
 
-	// make the skill visible to planner
-	if err := pg.ToggleSkillVisibility(ag.ID, skillName, true); err != nil {
+func TestSharedSkillSwitchHTTPPersists(t *testing.T) {
+	e := newNativeEnv(t)
+	s := &Server{m: &Manager{pg: e.pg}, skillDir: e.skillDir}
+	for _, enabled := range []bool{false, true} {
+		body, _ := json.Marshal(map[string]bool{"enabled": enabled})
+		r := httptest.NewRequest("PUT", "/api/skills/"+e.skill+"/enabled", strings.NewReader(string(body)))
+		r.SetPathValue("name", e.skill)
+		w := httptest.NewRecorder()
+		s.fsSetSkillEnabled(w, r)
+		if w.Code != 200 {
+			t.Fatalf("update: %d %s", w.Code, w.Body.String())
+		}
+		states, err := e.pg.SkillEnabledStates(context.Background())
+		if err != nil || states[e.skill] != enabled {
+			t.Fatalf("persisted state: %v, %v", states, err)
+		}
+		w = httptest.NewRecorder()
+		s.fsListSkills(w, httptest.NewRequest("GET", "/api/skills", nil))
+		var result struct {
+			Skills []skillFileNode `json:"skills"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Skills) != 1 || result.Skills[0].Enabled != enabled {
+			t.Fatalf("list state: %+v", result)
+		}
+		if got := e.both(t, "toggle"); got.skill != enabled {
+			t.Fatalf("runtime state: %+v", got)
+		}
+	}
+	t.Cleanup(func() { _ = e.pg.DeleteSkillSettings(context.Background(), e.skill) })
+}
+
+func TestSharedSkillDuplicatesNeverOverwrite(t *testing.T) {
+	e := newNativeEnv(t)
+	const duplicateDir = "duplicate-skill"
+	folder := filepath.Join(e.skillDir, duplicateDir)
+	if err := os.MkdirAll(folder, 0700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = pg.ToggleSkillVisibility(ag.ID, skillName, false) })
-
-	// after: the Skill meta-tool is packed in
-	extra, _, cleanup = agent.ToolAugment(context.Background(), "planner")
+	data := "---\nname: " + e.skill + "\ndescription: collision\n---\nother instructions"
+	if err := os.WriteFile(filepath.Join(folder, "SKILL.md"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range e.keys {
+		if got := e.read(key); got.skill {
+			t.Errorf("%s silently accepted a duplicate skill name", key)
+		}
+	}
+	if err := e.pg.SetSkillEnabled(context.Background(), duplicateDir, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.pg.DeleteSkillSettings(context.Background(), duplicateDir) })
+	if got := e.both(t, "duplicate disabled"); !got.skill || got.skillTxt != "skill v1" {
+		t.Fatalf("enabled original lost: %+v", got)
+	}
+	combined, _, cleanup := agent.AugmentTools(context.Background(), "planner", nil)
 	defer cleanup()
-	if !hasSkillTool(extra) {
-		t.Fatalf("expected the Skill meta-tool after making the skill visible")
-	}
-
-	// AugmentTools appends extra to base without filtering base
-	combined, _, c2 := agent.AugmentTools(context.Background(), "planner", nil)
-	defer c2()
 	if !hasSkillTool(combined) {
-		t.Fatalf("AugmentTools should surface the Skill meta-tool")
+		t.Fatal("planner lacks unbound enabled skill")
 	}
 }

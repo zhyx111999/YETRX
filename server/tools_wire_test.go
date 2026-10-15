@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	actool "github.com/Autumn-27/norma/tool"
 )
 
 func names(tools []actool.CoreTool) map[string]actool.CoreTool {
@@ -18,9 +18,7 @@ func names(tools []actool.CoreTool) map[string]actool.CoreTool {
 	return m
 }
 
-// TestWireTools verifies end-to-end against the live dev PG: wireTools seeds the
-// catalog, ToolResolve keeps record_fact for worker but drops it for planner (not
-// bound), and an edited description + injected default flow through.
+// TestWireTools verifies global enablement and shared metadata/default injection.
 func TestWireTools(t *testing.T) {
 	dsn, _, err := db.DSN()
 	if err != nil {
@@ -64,10 +62,10 @@ func TestWireTools(t *testing.T) {
 	} else if bash.Description() != actool.NewBash().Description() {
 		t.Error("Bash should pass through undecorated, but description changed")
 	}
-	// planner is not bound to record_fact → resolving a base that contains it drops it.
+	// Historical bindings do not hide an enabled tool from another preset.
 	planner := names(agent.ToolResolve(ctx, "planner", base))
-	if _, ok := planner["record_fact"]; ok {
-		t.Error("planner should not get record_fact (not bound)")
+	if _, ok := planner["record_fact"]; !ok {
+		t.Error("planner lost enabled shared record_fact")
 	}
 
 	// Edit description + add a default to a scalar param, then confirm the resolved

@@ -365,8 +365,8 @@ func TestNativeModesShareGlobalResources(t *testing.T) {
 		}
 	})
 
-	// 绑定/可见性只影响被配置的那个模式；两个方向都验，避免偏向某一个 key。
-	t.Run("bindings_are_per_mode", func(t *testing.T) {
+	// Historical bindings remain editable data but no longer filter capabilities.
+	t.Run("legacy_bindings_do_not_restrict_shared_resources", func(t *testing.T) {
 		for i, only := range all {
 			other := all[1-i]
 			e.setCustomTool("custom v1", []string{only}, true)
@@ -381,8 +381,8 @@ func TestNativeModesShareGlobalResources(t *testing.T) {
 			if got.custom == "" || got.system == "" || !got.mcp || !got.skill {
 				t.Errorf("only=%s: bound mode lost a resource: %+v", only, got)
 			}
-			if miss.custom != "" || miss.system != "" || miss.mcp || miss.skill {
-				t.Errorf("only=%s: unbound mode %s still sees resources: %+v", only, other, miss)
+			if miss.custom == "" || miss.system == "" || !miss.mcp || !miss.skill {
+				t.Errorf("only=%s: unbound preset %s lost shared resources: %+v", only, other, miss)
 			}
 			if !got.sdk || !miss.sdk { // SDK 基础工具不受绑定影响
 				t.Errorf("only=%s: SDK base tools must stay for every mode (%v/%v)", only, got.sdk, miss.sdk)

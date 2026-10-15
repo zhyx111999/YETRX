@@ -157,23 +157,6 @@ func NewWorker(prov llm.Provider, model, workDir string, tx *transcript.Store, w
 	return &Worker{prov: prov, model: model, workDir: workDir, tx: tx, window: window, maxTurns: maxTurns, extraTools: extra}
 }
 
-// defaultToolsExcept returns actool.DefaultTools() minus the named tools (by
-// CoreTool.Name()). Used to trim SDK default tools an agent shouldn't have.
-func defaultToolsExcept(exclude ...string) []actool.CoreTool {
-	drop := make(map[string]bool, len(exclude))
-	for _, n := range exclude {
-		drop[n] = true
-	}
-	all := actool.DefaultTools()
-	out := make([]actool.CoreTool, 0, len(all))
-	for _, t := range all {
-		if !drop[t.Name()] {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 func (w *Worker) SetCompactionWindowResolver(fn func() int) { w.windowFn = fn }
 
 func (w *Worker) compactionWindow() int {
@@ -373,10 +356,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// base = built-in worker tools ∪ host tools (traffic) ∪ default tools (incl. Bash);
 	// then augment with the agent's visible skills/MCP. During the SDK settlement
 	// phase, Bash is hidden via Settlement.DisabledTools (no local gating needed).
-	base := append(tsx.WorkerTools(), w.extraTools...)
-	// worker 刻意不给 MultiEdit/Glob/Grep：文件精改用 Edit、检索走 Bash(grep/find)，
-	// 收敛工具面、减少低价值调用。其余 SDK 默认工具(Read/Write/Edit/LS/Bash/Sleep)照常。
-	base = append(base, defaultToolsExcept("MultiEdit", "Glob", "Grep")...)
+	base := append(tsx.AvailableDomainTools(), w.extraTools...)
+	base = append(base, actool.DefaultTools()...)
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID})
 	tools, def, cleanup := AugmentTools(ctx, "worker", base)
 	defer cleanup()
