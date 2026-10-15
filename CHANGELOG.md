@@ -2,7 +2,7 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.2.5-yetrx.12] - 2026-10-15
 
 - 默认资源 helper 为 64、每父对话子代理并发为 16，均可在「系统配置 → 执行并发」持久保存、即时调整后续准入；调低不强停运行中的工作，也不重建执行器或丢弃已有占用。每探索任务 Worker 默认 8，沿用已有设置，不重复新增入口；探索根任务并发开关与默认上限不变。
 - 删除所有角色共用的 Agent 会话数量上限，停用 `ARTEX_EXECUTION_MAX_SESSIONS`；保留 transcript 单写者保护、进程隔离及单树/聚合资源硬预算。
