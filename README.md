@@ -88,6 +88,23 @@ Agent 可调用全局 `send_file` 工具，将已生成的文件直接发到当�
 
 相对路径按当前会话工作目录解析，也可发送绝对路径。支持普通文件，默认单个最多 128 MiB；可在「系统配置 → Agent 文件发送」中按 MiB 调整，0 表示不限制大小。保存后对下一次发送生效，无需重启；目录先打包。服务端保存独立副本，源文件修改或工作树删除不会改变已发附件；删除会话会清理该会话的附件。子代理将产物路径交给主代理，由主代理审查后发送。
 
+## 执行进程与资源限制
+
+主聊天、对话子代理、Planner、Worker、MainAgent 和第 0 轮目标拆解的 Norma 会话循环默认运行在受监督子进程。SDK 文件/Bash、交互式 Shell 和自定义 command/script/http 在执行进程运行；MCP 的连接、发现与调用使用独立受限 helper。网站保留模型路由、限速、计量、审批、数据库及协调。
+
+Linux 需要 cgroup v2 与 systemd `Delegate=yes`，服务使用 `KillMode=control-group`。启动先准备限制并验证子进程握手，无法实施限制时明确失败。Windows 使用嵌套 Job Object；其他平台目前需显式设置 `ARTEX_EXECUTION_ENABLED=false` 使用原生进程内路径。关闭开关不会删除用户数据或配置。
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `ARTEX_EXECUTION_ENABLED` | `true` | 启用进程隔离 |
+| `ARTEX_EXECUTION_MAX_SESSIONS` | `8` | 同时运行的 Agent 会话上限 |
+| `ARTEX_EXECUTION_MEMORY_MIB` / `ARTEX_EXECUTION_CPUS` / `ARTEX_EXECUTION_PROCESSES` | `512` / `1` / `128` | 每个 Agent 及其后代的硬限制 |
+| `ARTEX_RESOURCE_MAX_WORKERS` | `16` | MCP 与管理页测试 helper 总数 |
+| `ARTEX_RESOURCE_MEMORY_MIB` / `ARTEX_RESOURCE_CPUS` / `ARTEX_RESOURCE_PROCESSES` | `384` / `1` / `128` | 每个 helper 及其后代的硬限制 |
+| `ARTEX_EXECUTION_TOTAL_MEMORY_MIB` / `ARTEX_EXECUTION_TOTAL_CPUS` / `ARTEX_EXECUTION_TOTAL_PROCESSES` | `3072` / `4` / `1024` | 所有 Agent/helper 的聚合硬限制，网站进程不计入 |
+
+CPU 值以逻辑核心为单位，Linux 的进程数同时计算线程。容量满时明确返回忙碌；同一 transcript 不允许并发写入，真实进程树退出后才释放容量。主停止仍只取消当前会话，后台任务由各自取消入口控制。共享目录组织文件；此功能不增加文件系统或网络权限沙箱。
+
 ## 历史聊天查阅
 
 Agent 可用三个只读工具查阅历史会话，数据来自数据库中的会话活动账本，不读取模型密钥等配置表：
@@ -110,7 +127,7 @@ Agent 可用三个只读工具查阅历史会话，数据来自数据库中的�
 ./artex -addr :18787
 ```
 
-数据库、模型密钥、JWT 签名密钥、历史和用户编辑的技能属于现有实例，应保留，不能用源码包中的默认文件覆盖。工具以服务用户身份运行；对话与子代理工作目录用于组织文件，不构成操作系统隔离。
+数据库、模型密钥、JWT 签名密钥、历史和用户编辑的技能属于现有实例，应保留，不能用源码包中的默认文件覆盖。工具以服务用户身份运行；对话与子代理工作目录用于组织文件，执行资源由上述独立进程及 OS 硬限制管理。
 
 旧内嵌版本的源码保存在 `archive/pi-integration` 分支。使用过旧运行时的对话，在首次原生运行前从活动记录重建上下文，旧工具调用作为历史文字保留，避免重放。原始文件和旧原生 transcript 副本保留供回溯；网页记录不删除。
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -26,8 +27,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 
 		reg, err := loadSharedSkills(ctx, pg, skillDir)
 		if err != nil {
-			log.Printf("[resources] skill enablement unavailable; skipping extras to preserve MCP gates: %v", err)
-			return nil, agent.DeferredInfo{}, nil
+			return nil, agent.DeferredInfo{Err: fmt.Errorf("shared skill settings unavailable: %w", err)}, nil
 		}
 		// A server named by any enabled skill's `mcps:` is skill-gated: its tools
 		// are deferred + locked (not in the global block) until that skill loads.
@@ -43,11 +43,22 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		// Connect globally enabled MCPs. Skill-referenced tools stay locked until
 		// the skill loads; all other enabled MCP tools are initially discoverable.
 		var closers []io.Closer
+		cleanup := func() {
+			for _, c := range closers {
+				_ = c.Close()
+			}
+		}
+		setupError := func(name string, err error) ([]actool.CoreTool, agent.DeferredInfo, func()) {
+			return nil, agent.DeferredInfo{Err: fmt.Errorf("MCP %s unavailable: %w", name, err)}, cleanup
+		}
 		serverTools := map[string][]string{} // server name → its tool names
 		var allNames, globalNames []string
 		globalSet := map[string]bool{}
 		{
-			all, _ := pg.ListMCP()
+			all, err := pg.ListMCP()
+			if err != nil {
+				return setupError("catalog", err)
+			}
 			for _, m := range all {
 				if !m.Enabled {
 					continue
@@ -55,14 +66,12 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				skillGated := gated[m.Name]
 				cl, err := connectMCP(ctx, m)
 				if err != nil {
-					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
-					continue
+					return setupError(m.Name, err)
 				}
 				closers = append(closers, cl)
 				ts, err := cl.Tools(ctx)
 				if err != nil {
-					log.Printf("[mcp] %s tools/list 失败: %v", m.Name, err)
-					continue
+					return setupError(m.Name, err)
 				}
 				for _, t := range ts {
 					extra = append(extra, t)
@@ -128,11 +137,6 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			}
 		}
 
-		cleanup := func() {
-			for _, c := range closers {
-				_ = c.Close()
-			}
-		}
 		def := agent.DeferredInfo{
 			Deferred:    allNames,
 			GlobalNames: globalNames,
@@ -174,10 +178,8 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 			log.Printf("[tools] seed %s 失败: %v", s.Key, err)
 		}
 	}
-	// Seed the traffic host tools so they're bindable per-agent like built-ins.
-	// Default binding = worker (preserves prior behavior). Their runtime availability
-	// is still gated by the global capture switch (hostTools() returns them only when
-	// capture is on), so an off-capture binding simply never surfaces the tool.
+	// Seed traffic metadata without rewriting historical bindings. Runtime
+	// availability still requires the existing global capture switch.
 	trafficAgents, _ := json.Marshal([]string{"worker"})
 	for _, t := range traffic.SeedToolMetas() {
 		schema, _ := json.Marshal(t.InputSchema())

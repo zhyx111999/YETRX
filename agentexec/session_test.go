@@ -52,6 +52,12 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	if os.Getenv("YETRX_EXECUTION_LINUX_TEST") == "1" {
+		if err := execution.InitCgroup(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	os.Exit(m.Run())
 }
 func objectSchema() map[string]any {
@@ -103,7 +109,7 @@ func use(id, name, input string) llm.ContentBlock {
 	return llm.ContentBlock{Type: llm.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(input)}
 }
 func testConfig() Config {
-	return Config{Args: []string{"-test.run=^$"}, Env: append(os.Environ(), "AGENTEXEC_TEST_CHILD=1", "ARTEX_CONFIG=C:/nonexistent-agentexec-child-config", "ARTEX_PG_DSN="), Limits: execution.Limits{MemoryBytes: 768 << 20, CPUs: 1, Processes: 32}}
+	return Config{Args: []string{"-test.run=^$"}, Env: append(os.Environ(), "AGENTEXEC_TEST_CHILD=1", "ARTEX_CONFIG=C:/nonexistent-agentexec-child-config", "ARTEX_PG_DSN="), Limits: execution.Limits{MemoryBytes: 768 << 20, CPUs: 1, Processes: 128}}
 }
 func startTest(t *testing.T, opts agentcore.Options, config ...Config) *Session {
 	t.Helper()

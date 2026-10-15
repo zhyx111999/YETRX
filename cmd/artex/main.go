@@ -44,6 +44,13 @@ func main() {
 }
 
 func run() int {
+	if worker, err := server.RunExecutionWorker(context.Background(), os.Args[1:]); worker {
+		if err != nil {
+			log.Printf("execution worker: %v", err)
+			return 1
+		}
+		return 0
+	}
 	var (
 		addr    = flag.String("addr", ":18787", "HTTP listen address")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
@@ -87,6 +94,15 @@ func run() int {
 	defer stop()
 	ctx, shutdown := shutdownContext(sigCtx)
 	defer shutdown(agent.AbortShutdown)
+	executionConfig, err := config.Execution()
+	if err != nil {
+		log.Printf("execution configuration: %v", err)
+		return 1
+	}
+	if err := server.ConfigureExecution(ctx, executionConfig); err != nil {
+		log.Printf("execution initialization: %v", err)
+		return 1
+	}
 
 	mgr, err := server.NewManager(*dataDir, *proxy)
 	if err != nil {

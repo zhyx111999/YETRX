@@ -41,7 +41,7 @@ func jsonResult(v any) (actool.Result, error) {
 func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools := append(s.m.HostTools(), s.orchestrationTools()...)
 	tools = append(tools, s.findingRetestTools()...)
-	tools = append(tools, s.platformTools()...) // 全局平台操作工具，按模式绑定
+	tools = append(tools, s.platformTools()...) // globally enabled platform operations
 	tools = append(tools, s.workflowTools()...)
 	tools = append(tools, s.chatFileTools()...)
 	tools = append(tools, s.chatHistoryTools()...)
@@ -491,9 +491,8 @@ func (s *Server) deriveTaskStatus(t *Task) string {
 	return "created"
 }
 
-// orchestrationToolSeeds seeds the cross-task tools into the tools table so they
-// are bindable per-agent (default: bound to nobody — opt-in for orchestration
-// agents). First-insert only, like the traffic seeds.
+// seedOrchestrationTools adds shared operations without overwriting catalog edits.
+// Historical bindings are retained; global enablement controls availability.
 func (s *Server) seedOrchestrationTools() {
 	// First-insert only; all resources remain in the existing global tools table.
 	agentBindings, _ := json.Marshal([]string{"agent"})

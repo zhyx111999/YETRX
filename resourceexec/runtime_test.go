@@ -43,6 +43,12 @@ func TestMain(m *testing.M) {
 			time.Sleep(time.Hour)
 		}
 	}
+	if os.Getenv("YETRX_EXECUTION_LINUX_TEST") == "1" {
+		if err := execution.InitCgroup(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	os.Exit(m.Run())
 }
 func fixtureStdio() {
@@ -486,6 +492,9 @@ func TestCustomCommandProcessAndProxy(t *testing.T) {
 
 func TestCustomScriptTimeout(t *testing.T) {
 	interp, err := exec.LookPath("python")
+	if err != nil {
+		interp, err = exec.LookPath("python3")
+	}
 	if err != nil {
 		t.Skip("Python unavailable")
 	}

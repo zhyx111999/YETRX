@@ -74,8 +74,8 @@ func TestLinuxCgroupIntegration(t *testing.T) {
 		t.Fatalf("cgroup not removed: %v", err)
 	}
 	limited := startHelper(t, testContext(t), "rpc", Limits{Processes: 1})
-	if err := limited.Wait(); err == nil || !strings.Contains(limited.StderrTail(), "failed to create new OS thread") {
-		t.Fatalf("pids.max=1 did not refuse runtime threads: %v", err)
+	if err := limited.Wait(); err == nil || !(strings.Contains(limited.StderrTail(), "failed to create new OS thread") || strings.Contains(limited.StderrTail(), "pthread_create failed: Resource temporarily unavailable")) {
+		t.Fatalf("pids.max=1 did not refuse runtime threads: %v; stderr=%s", err, limited.StderrTail())
 	}
 	testProcessCleanup(t, Limits{MemoryBytes: 256 << 20, CPUs: 1, Processes: 128})
 }

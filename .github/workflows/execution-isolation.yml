@@ -1,0 +1,72 @@
+name: execution-isolation
+on:
+  push:
+    branches: ["**"]
+    paths: ["execution/**", "agentexec/**", "resourceexec/**", "agent/**", "server/**", "config/**", "cmd/**", "go.mod", "go.sum", ".github/workflows/execution-isolation.yml"]
+  pull_request:
+    paths: ["execution/**", "agentexec/**", "resourceexec/**", "agent/**", "server/**", "config/**", "cmd/**", "go.mod", "go.sum", ".github/workflows/execution-isolation.yml"]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      ARTEX_CONFIG: C:/__yetrx_isolated_config_absent__.json
+      ARTEX_PG_DSN: ""
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - run: go test -race ./execution ./agentexec ./resourceexec ./config -count=1 -timeout=180s
+      - run: go vet ./execution ./agentexec ./resourceexec ./config
+  linux:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: yetrx_test
+          POSTGRES_PASSWORD: isolated_test_only
+          POSTGRES_DB: yetrx_execution_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U yetrx_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ARTEX_CONFIG: /tmp/__yetrx_isolated_config_absent__.json
+      ARTEX_PG_DSN: postgres://yetrx_test:isolated_test_only@127.0.0.1:5432/yetrx_execution_test?sslmode=disable
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Build controlled test executables
+        run: |
+          mkdir -p server/webui/dist
+          printf '<html>isolated process tests</html>' > server/webui/dist/index.html
+          for package in execution agentexec resourceexec server; do
+            go test -race -c ./$package -o /tmp/yetrx-$package.test
+          done
+          go vet ./execution ./agentexec ./resourceexec ./agent ./server ./config
+      - name: Verify cgroup limits and cross-process behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          for package in execution agentexec resourceexec server; do
+            pattern='.'
+            if [ "$package" = server ]; then
+              pattern='^(TestExecution.*|TestResource.*|TestShared.*|TestChatHistory.*|TestMeterTool.*)$'
+            fi
+            sudo systemd-run --quiet --wait --pipe --collect \
+              -p "User=$(id -un)" -p Delegate=yes -p MemoryMax=4G -p CPUQuota=400% -p TasksMax=2048 \
+              --setenv=EXECUTION_TEST_CGROUP=1 --setenv=YETRX_EXECUTION_LINUX_TEST=1 \
+              --setenv="ARTEX_CONFIG=$ARTEX_CONFIG" --setenv="ARTEX_PG_DSN=$ARTEX_PG_DSN" \
+              /tmp/yetrx-$package.test -test.v -test.run="$pattern" -test.timeout=240s | tee $package-process.log
+            ! grep -q -- '--- SKIP:' $package-process.log
+          done

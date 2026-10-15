@@ -1,5 +1,3 @@
-//go:build resourceexec_bridge
-
 package server
 
 import (
@@ -55,6 +53,9 @@ func (p *resourceFixtureProvider) Stream(context.Context, llm.CompletionRequest)
 
 func TestResourceActualAgentBridge(t *testing.T) {
 	interp, err := exec.LookPath("python")
+	if err != nil {
+		interp, err = exec.LookPath("python3")
+	}
 	if err != nil {
 		t.Skip("Python unavailable")
 	}

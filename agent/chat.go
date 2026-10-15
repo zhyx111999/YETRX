@@ -152,6 +152,9 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
+	if def.Err != nil {
+		return "", def.Err
+	}
 	if control.Child {
 		tools, def = childTools(tools, def)
 	}

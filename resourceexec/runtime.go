@@ -157,7 +157,12 @@ func (r *Runtime) start(ctx context.Context, init initRequest) (*processClient, 
 		<-r.slots
 		return nil, errors.New("resourceexec: Start returned nil process")
 	}
-	go func() { _ = p.Wait(); <-r.slots }()
+	go func() {
+		_ = p.Wait()
+		if p.Close() == nil {
+			<-r.slots
+		}
+	}()
 	cl := &processClient{process: p, ctx: ctx}
 	if err = p.Peer.Call(ctx, "init", init, nil); err != nil {
 		_ = cl.Close()

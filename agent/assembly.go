@@ -16,6 +16,7 @@ import (
 // UnlockSkill unlocks a named skill's MCPs — hosts call it to rebuild the unlock set
 // from history on a resumed session (design doc C2).
 type DeferredInfo struct {
+	Err             error             // resource setup failed; callers must stop before creating a session
 	FindingGuidance string            // derived from the final permitted tools, including DB overrides
 	Deferred        []string          // all MCP tool names (schema withheld)
 	GlobalNames     []string          // MCP names to list in the system-prompt block
@@ -43,6 +44,9 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 		extra, def, cl = ToolAugment(ctx, agentKey)
 		if cl != nil {
 			cleanup = cl
+		}
+		if def.Err != nil {
+			return nil, def, cleanup
 		}
 		if len(extra) > 0 {
 			out = append(append([]actool.CoreTool{}, base...), extra...)

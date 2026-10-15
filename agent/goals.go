@@ -132,6 +132,12 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
 	tools, def, cleanup := AugmentTools(ctx, "goals", append(tsx.AvailableDomainTools(), actool.DefaultTools()...))
 	defer cleanup()
+	if def.Err != nil {
+		if emit != nil {
+			emit(db.Activity{Worker: "planner", Kind: "error", Summary: "目标拆解资源不可用", Detail: def.Err.Error()})
+		}
+		return nil
+	}
 	if as != nil && taskID > 0 {
 		sys += goalsScopeTail
 	}
@@ -148,7 +154,7 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 			emit(r)
 		}
 	}
-	captureRun(ctx, agentcore.Options{
+	_, _, runErr := captureRun(ctx, agentcore.Options{
 		Provider:               prov,
 		SystemPrompt:           system,
 		DynamicBoundary:        boundary,
@@ -171,6 +177,9 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 		NonStreaming: nonStreaming, // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    maxTokens,    // 0 = 不发上限,由服务端默认值决定
 	}, userMsg, captureEmit)
+	if runErr != nil && emit != nil {
+		emit(db.Activity{Worker: "planner", Kind: "error", Summary: "目标拆解执行失败", Detail: runErr.Error()})
+	}
 	// set_goals persisted the goals directly; read them back so the caller sees what
 	// was written (empty slice ⇒ the LLM produced nothing ⇒ caller falls back).
 	if ts == nil {
