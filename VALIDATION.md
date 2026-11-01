@@ -1,5 +1,18 @@
 # 验证记录
 
+## 2026-11-02：生产清空数据并恢复原版 ARTEX
+
+用户明确选择保留 GitHub 仓库、清空本项目服务器数据库与聊天/附件等数据、全新部署原版。`zhyx111999/YETRX` 和本地源码保留；本次没有修改应用源码。
+
+- 从本机完整 Git 历史导出原版基线 `a9d11cb852eadad00669e4f6a05ee59cbbd14860`，按原 README 的静态前端与原 `build.sh` 编译 Linux amd64。版本取原 `git describe`：`0.3.15-8-ga9d11cb`。两个原仓库当时无法通过 GitHub API 读取，因此使用已保存且可校验的基线，没有替换为其他分支或第三方新版本。构建后逐文件核对原始归档，全部源码内容未改动。
+- 原版 ZIP SHA256 `b1b2bd2d9a916c0bf344306ace5c7b898a21b27648a4193f354dca65315e8b72`；线上二进制 SHA256 `44f045cb46c9be01dcab8905d4a3a0fa8e016c5f2aae0de5fe3f01ef009fb150`。暂存包与服务器二进制均核对通过，Linux `-h` 命令入口成功。
+- 确认无活动执行后停止 `.12`，取得最终 PostgreSQL dump、文件摘要、SQLite 和 systemd 配置备份；旧安装文件整体移入 `/opt/artex/_rollback-original-reset-20261102/previous-install`。该目录和数据库备份作为离线恢复材料保留，不是当前应用数据；更早回滚目录也保留。本次未触发回滚。
+- 仅删除重建 PostgreSQL 的 `artex` 数据库，沿用原数据库角色及 locale；其他数据库的名称、OID、所有者和 locale 元数据前后相同。当前运行目录重新安装原版程序、原 `start.sh` 和 `api-recon`/`playwright-cli`/`scopesentry` 三个默认技能，旧 transcript、工作流、上传附件和签名 key 不再使用，新的 JWT key 由原版生成。
+- systemd 改由原版 `start.sh` 启动，监听端口仍为 18787；移除 YETRX 的 `90-execution-isolation.conf`，执行行为恢复原版。健康版本 `0.3.15-8-ga9d11cb`，服务 active、`NRestarts=0`，启动脚本下实际运行 `/opt/artex/artex`。
+- 14 张业务表核对为空，包括会话/活动、任务/归档、探索、资产/公司、发现/复测、模型和旁路提问；旧自定义 `personas`、`conversation_tasks`、`skill_settings` 表不存在，旧并发/预算/迁移设置键不存在。原版正常生成 8 个 Agent、8 条默认提示词；新库不是零表或零配置。原来的 31 个会话、4670 条活动、2 个模型配置、12 条提示词版本和 1 个人格仅留在恢复备份中。
+- 内外网 `/api/auth/status` 返回 `200 {"initialized":false}`，数据库中 `auth.password_hash` 行不存在；`/setup/` 返回 HTTP 200，标题为 `ARTEX — 自主渗透测试控制台`，15 个引用脚本均 HTTP 200，包含初始化表单。未认证 settings 请求为 401。未提交初始化密码，用户需在首次设置页设置新密码并重新配置模型。
+- 本次仅做必要前端/后端构建、命令入口、健康/初始化/静态资源和数据清空核对；未跑全量或单元回归、浏览器交互、真实模型及生产任务测试。下方 `.12` 上线记录已成为历史，不能代表当前服务器运行版本。
+
 ## v0.2.5-yetrx.12：发布与上线
 
 2026-10-15，按用户上线授权，从 `.11` 升级到 `.12`。功能源码为 `da4fef19e87bea170450de794260e4abcb527aa0`，发布标签指向 `20f9ba0e2783fc7304747d72672fc498c4282f2a`。
